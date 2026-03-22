@@ -1,0 +1,21 @@
+{
+    "cmake.configureOnOpen": true,
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.generatorPlatform": "x64",
+    "cmake.configureSettings": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+    },
+    "cmake.copyCompileCommands": "${workspaceFolder}/compile_commands.json",
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+    "files.associations": {
+        "*.h": "cpp",
+        "*.cpp": "cpp"
+    },
+    "cmake.generator": "Visual Studio 18 2026",
+    "cmake.preferredGenerators": [
+        "Visual Studio 18 2026",
+        "Visual Studio 17 2022"
+    ]
+}

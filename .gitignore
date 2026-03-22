@@ -1,0 +1,65 @@
+# --- CMake / build trees ---
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Accidental in-source configure (keep the tree clean if someone runs cmake .)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+
+# MSVC / VS generator output when the build dir is the repo root (rare but noisy)
+/Debug/
+/Release/
+/MinSizeRel/
+/RelWithDebInfo/
+/x64/
+/Win32/
+
+# --- Visual Studio ---
+.vs/
+*.user
+*.userosscache
+*.suo
+*.VC.db*
+*.VC.VC.opendb
+*.aps
+ipch/
+
+# --- OS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Editors / IDEs ---
+.idea/
+*.swp
+*.sw?
+*~
+
+# --- Tooling / artifacts (optional local paths) ---
+# Uncomment if you use these and they land in the repo:
+# .vscode/
+# .cursor/
+
+# Personal shortcuts or local-only paths (this repo had a user symlink at root)
+Another Project Symlink
+
+# --- Dependencies / package managers (if used later) ---
+vcpkg_installed/
+
+# --- Coverage / profiling ---
+*.gcno
+*.gcda
+*.gcov
+
+# --- Local large test fixtures (uncomment if you store big files under test-assets/) ---
+# test-assets/*.wav
+# test-assets/large/
