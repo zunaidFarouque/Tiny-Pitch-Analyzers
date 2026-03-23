@@ -55,12 +55,14 @@ varying lowp vec4 vCol;
 void main()
 {
     const float e = texture2D (tex, vec2 (vUV.y, vUV.x)).r;
-    // Mirror CPU exporter intensity curve: sqrt + scale + clamp into 0..1.
-    const float m = clamp (sqrt (max (e, 0.0)) * 0.12, 0.0, 1.0);
-    // PitchLab-style compositing: intensity drives alpha, not an always-on lane-color underlay.
-    // Compress low energies so empty background stays near-black.
-    const float alpha = m * m;
-    gl_FragColor = vec4 (vCol.rgb, alpha);
+    // Intensity mapping (grayscale):
+    // We intentionally use a conservative scale so "no pitch / white noise" stays dark
+    // instead of clamping to pure white everywhere.
+    const float m = clamp (sqrt (max (e, 0.0)) * 0.03, 0.0, 1.0);
+    // More intense => brighter pixel.
+    const float alpha = m;
+    // Monochrome waterfall: constant white RGB, intensity controls brightness via alpha.
+    gl_FragColor = vec4 (1.0, 1.0, 1.0, alpha);
 }
 )";
 #else
@@ -111,11 +113,12 @@ out vec4 fragColor;
 void main()
 {
     float e = texture (tex, vec2 (vUV.y, vUV.x)).r;
-    float m = clamp (sqrt (max (e, 0.0)) * 0.12, 0.0, 1.0);
+    float m = clamp (sqrt (max (e, 0.0)) * 0.03, 0.0, 1.0);
     // PitchLab-style compositing: intensity drives alpha, not an always-on lane-color underlay.
     // Compress low energies so empty background stays near-black.
-    float alpha = m * m;
-    fragColor = vec4 (vCol.rgb, alpha);
+    float alpha = m;
+    // Monochrome waterfall: constant white RGB, intensity controls brightness via alpha.
+    fragColor = vec4 (1.0, 1.0, 1.0, alpha);
 }
 )";
 #endif
@@ -321,7 +324,8 @@ void OpenGLVisualizerHost::renderOpenGL()
     using namespace juce::gl;
     // Let JUCE manage the OpenGL viewport (it accounts for HiDPI scaling).
 
-    glClearColor (0.08f, 0.09f, 0.12f, 1.0f);
+    // Black background per grayscale waterfall requirements.
+    glClearColor (0.0f, 0.0f, 0.0f, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT);
 
     std::array<float, 384> row {};
@@ -447,15 +451,8 @@ void OpenGLVisualizerHost::renderWaterfall()
         const float s0 = (static_cast<float> (note) / 12.0f) * uSpan;
         const float s1 = (static_cast<float> (note + 1) / 12.0f) * uSpan;
         // With the waterfall shader UV-transpose: vertex UV.x -> texture V (time/history), vertex UV.y -> texture U (chroma).
-        juce::Colour laneColor = juce::Colours::white;
-        if (staticTables_ != nullptr)
-        {
-            const auto pal = staticTables_->spectralPaletteRgb();
-            const std::size_t idx = static_cast<std::size_t> (note) * 3u;
-            laneColor = juce::Colour::fromRGB ((int) pal[idx + 0], (int) pal[idx + 1], (int) pal[idx + 2]);
-            laneColor = laneColor.withAlpha (1.0f);
-        }
-
+        // Monochrome mode: quads are white; shader alpha controls actual brightness.
+        const juce::Colour laneColor = juce::Colours::white.withAlpha (1.0f);
         batch.addQuad (-1.0f, y0, 2.0f, y1 - y0, tLeft, s0, tRight, s1, laneColor);
     }
 
