@@ -1,12 +1,27 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include <juce_core/juce_core.h>
+#include <juce_graphics/juce_graphics.h>
+#include <juce_opengl/juce_opengl.h>
+#include <RenderFrameData.h>
+#include "IRendererHost.h"
+#include "SharedWaterfallRing.h"
+
+#include <array>
+#include <memory>
+#include <span>
+
+namespace pitchlab
+{
+class StaticTables;
+}
 
 /**
-    Minimal OpenGL viewport for future waterfall / batcher (New Plan §4.1).
-    If this region is black on Windows with D2D, try heavyweight peer / D2D workarounds from the roadmap.
+    OpenGL viewport: waveform (D0), waterfall strip (G), batcher + film reel (F).
+    New Plan §4.1: if black on Windows with D2D, try heavyweight peer / D2D workarounds.
  */
 class OpenGLVisualizerHost final : public juce::Component,
+                                   public IRendererHost,
                                    private juce::OpenGLRenderer
 {
 public:
@@ -14,13 +29,81 @@ public:
     ~OpenGLVisualizerHost() override;
 
     void paint (juce::Graphics& g) override;
+    void resized() override;
+
+    juce::Component& component() noexcept override { return *this; }
+    void setRenderFrame (const pitchlab::RenderFrameData& frame) noexcept override;
+    void setStaticTablesPtr (const pitchlab::StaticTables* tables) noexcept override { staticTables_ = tables; }
+
+    void setMode (VisualizationMode m) noexcept override { mode_ = m; }
+    [[nodiscard]] VisualizationMode mode() const noexcept override { return mode_; }
+    [[nodiscard]] bool isBackendHealthy() const noexcept { return backendHealthy_; }
+
+    /** Film reel dimensions (New Plan §4.3). */
+    static constexpr int kFilmWidth = 1024;
+    static constexpr int kFilmHeight = 384;
+    /** Fraction of texture width occupied by the 384-bin chroma row (leftmost texels). */
+    static constexpr float kChromaTexWidthFraction = 384.0f / static_cast<float> (kFilmWidth);
+
+    /** Upload one chroma row from audio/DSP thread (384 floats or bytes scaled later). */
+    void pushWaterfallRow (std::span<const float> row384) override;
 
 private:
     void newOpenGLContextCreated() override;
     void renderOpenGL() override;
     void openGLContextClosing() override;
 
+    void renderWaveform();
+    void renderWaterfall();
+    void renderNeedle();
+    void renderStrobeComposite();
+    void renderChordMatrix();
+    void createFilmTextureIfNeeded();
+    void ensureWhiteTexture();
+    void ensureStrobeTexture();
+    void rebuildAxisOverlayImage();
+    void uploadAxisOverlayTextureIfNeeded();
     juce::OpenGLContext openGLContext_;
+
+    const ::pitchlab::StaticTables* staticTables_ = nullptr;
+    pitchlab::RenderFrameData latestFrame_{};
+
+    VisualizationMode mode_ = VisualizationMode::Waveform;
+
+    std::unique_ptr<juce::OpenGLShaderProgram> lineShader_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> linePosAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> lineColorUniform_;
+
+    std::unique_ptr<juce::OpenGLShaderProgram> texShader_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> texPosAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> texUvAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> texColorAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> texSamplerUniform_;
+
+    // Waterfall uses a UV-transpose sampling rule so time/history maps to screen X.
+    std::unique_ptr<juce::OpenGLShaderProgram> waterfallTexShader_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> waterfallTexPosAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> waterfallTexUvAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Attribute> waterfallTexColorAttrib_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallTexSamplerUniform_;
+
+    GLuint lineVbo_ = 0;
+    GLuint waterfallVbo_ = 0;
+    GLuint dynamicVbo_ = 0;
+    GLuint waterfallTex_ = 0;
+    GLuint whiteTex_ = 0;
+    GLuint strobeTex_ = 0;
+    GLuint axisOverlayTex_ = 0;
+    int waterfallWriteY_ = 0;
+
+    SharedWaterfallRing waterfallRing_;
+    juce::CriticalSection frameLock_;
+    bool backendHealthy_ = false;
+
+    juce::Image axisOverlayImage_;
+    bool axisOverlayDirty_ = true;
+
+    std::vector<float> lineScratch_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OpenGLVisualizerHost)
 };

@@ -47,28 +47,47 @@ The Engine stays **agnostic** of whether samples came from disk or hardware.
 - Do not **edit** the vendored [JUCE/](../JUCE/) tree for product fixes; patch upstream or wrap in project code.
 - Do not implement heavy DSP **inline in the UI**; keep the Engine testable.
 
-## Data flow (target state)
+## Data flow (current)
 
 ```mermaid
 flowchart LR
   subgraph shell [Shell_JUCE_UI]
     FilePlayer[File_transport]
     MicInput[Mic_device]
-    Router[Audio_source_router]
+    Router[AudioAppComponent]
+    GLHost[OpenGLVisualizerHost]
+    Snap[WaveformSnapshotFeed]
   end
-  subgraph engine [Engine_core]
-    Process[Process_audio]
-    State[Analysis_state]
+  subgraph engine [Engine_PitchLabEngine]
+    Ingress[int16_ingress_ring]
+    Agc[AGC_int16]
+    Win[Q24_Hanning]
+    Fft[juce_dsp_FFT]
+    Chroma[fold_384]
+    State[EngineState_atomic_dirty]
   end
   FilePlayer --> Router
   MicInput --> Router
-  Router --> Process
-  Process --> State
+  Router --> Ingress
+  Ingress --> Agc --> Win --> Fft --> Chroma
+  Chroma --> State
+  Router --> Snap
+  Snap --> GLHost
+  Chroma --> GLHost
 ```
 
-## OpenGL / JUCE 8 (when rendering lands)
+- **Audio thread:** `PitchLabEngine::processAudioInterleaved` runs ingress → analysis chain (AGC, Hanning Q24, real FFT magnitudes, 384-bin chroma fold). `EngineState::analysisDirty` is `std::atomic`; the GL thread clears it when a **waterfall row** is uploaded via `glTexSubImage2D`.
+- **GL thread:** `OpenGLVisualizerHost` reads `WaveformSnapshotFeed` (short `CriticalSection` around a float snapshot) for the **Waveform** mode; **Waterfall** uses a 1024×384 R32F “film reel” with **dirty-row** uploads (384-wide subimage in the leftmost texels). The 12 vertical strips sample consecutive U segments across only that 384/1024 chroma portion, and the strip geometry is uploaded via a persistent `waterfallVbo_` with per-frame `glBufferSubData` (no per-frame buffer create/delete).
+- **Visualization modes:** `VisualizationMode` enum — Waveform (live), Waterfall (chroma texture), Needle / Strobe / Chord matrix (stub renderers until further roadmap work).
 
-The roadmap calls for a custom OpenGL path and notes **Direct2D vs OpenGL** interactions on Windows. When that work starts, follow [My analysis/New Plan.md](../My%20analysis/New%20Plan.md) and enable the commented OpenGL linkage in the root `CMakeLists.txt` as appropriate.
+## Phase 5 hooks (started)
+
+- [PitchLabOptimizations.h](../Source/Engine/PitchLabOptimizations.h): integer RGB blend helper (§6.1).
+- [PitchLabChord.h](../Source/Engine/PitchLabChord.h): placeholder for anti-chord penalty (§6.3).
+
+## OpenGL / JUCE 8
+
+OpenGL 3.2 is enabled for `TinyPitchHost`. If the GL child view is **black on Windows** (D2D interaction), see comments on `OpenGLVisualizerHost` and [New Plan.md](../My%20analysis/New%20Plan.md) §4.1 (heavyweight peer / D2D workarounds).
 
 ## Build and test (verification)
 

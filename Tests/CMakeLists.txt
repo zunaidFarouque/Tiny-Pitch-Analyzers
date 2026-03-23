@@ -1,15 +1,39 @@
 add_executable(PitchLabEngineTests
+    ../Source/App/SharedWaterfallRing.cpp
     smoke_engine.cpp
+    test_agc.cpp
+    test_chord.cpp
+    test_chroma_map.cpp
+    test_copy_latest.cpp
     test_circular_buffer.cpp
     test_engine_state.cpp
+    test_fft_chroma.cpp
     test_float_ingress.cpp
+    test_null_pipeline.cpp
+    test_optimizations.cpp
+    test_pitch_from_spectrum.cpp
     test_pitch_lab_engine.cpp
+    test_render_frame_snapshot.cpp
+    test_renderer_backend_policy.cpp
+    test_shared_waterfall_ring.cpp
     test_static_tables.cpp
+    test_viz_export_smoke.cpp
+    test_waterfall_direction.cpp
+    test_window_q24.cpp
 )
 
 target_link_libraries(PitchLabEngineTests PRIVATE
     PitchLabEngine
     GTest::gtest_main
+)
+
+target_include_directories(PitchLabEngineTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/Source/App"
+    "${CMAKE_SOURCE_DIR}/Source/Tools/VizExport"
+)
+
+target_compile_definitions(PitchLabEngineTests PRIVATE
+    "PITCHLAB_VIZ_EXPORT_EXE=\"$<TARGET_FILE:PitchLabVizExport>\""
 )
 
 target_compile_features(PitchLabEngineTests PRIVATE cxx_std_20)

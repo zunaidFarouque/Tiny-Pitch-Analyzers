@@ -25,6 +25,9 @@ public:
     /** Direct sample read for tests (index in [0, capacity)). */
     [[nodiscard]] std::int16_t rawAt (std::size_t index) const noexcept;
 
+    /** Last `dst.size()` samples in chronological order (oldest at dst.front()). If dst is longer than capacity, leading samples are zero-padded. */
+    void copyLatestInto (std::span<std::int16_t> dst) const noexcept;
+
 private:
     std::vector<std::int16_t> storage_;
     std::size_t writeHead_ = 0;

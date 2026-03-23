@@ -13,10 +13,10 @@ TEST(PitchLabEngine, PrepareCreatesTablesAndResetClearsIngress)
     const float c0[] = { 0.5f, 0.5f };
     const float* ch[] = { c0 };
     eng.processAudioInterleaved (ch, 1, 2);
-    EXPECT_TRUE(eng.state().analysisDirty);
+    EXPECT_TRUE(eng.state().analysisDirty.load());
 
     eng.reset();
-    EXPECT_FALSE(eng.state().analysisDirty);
+    EXPECT_FALSE(eng.state().analysisDirty.load());
     EXPECT_EQ(eng.ingressBuffer().writeHead(), 0u);
 }
 

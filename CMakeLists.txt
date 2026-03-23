@@ -21,11 +21,18 @@ FetchContent_MakeAvailable(googletest)
 add_subdirectory(JUCE)
 
 add_library(PitchLabEngine STATIC
+    Source/Engine/AgcInt16.cpp
+    Source/Engine/ChromaFolder.cpp
+    Source/Engine/ChromaMap.cpp
     Source/Engine/CircularInt16Buffer.cpp
     Source/Engine/EngineState.cpp
     Source/Engine/FloatIngress.cpp
+    Source/Engine/FftMagnitudes.cpp
+    Source/Engine/PitchLabChord.cpp
+    Source/Engine/PitchFromSpectrum.cpp
     Source/Engine/PitchLabEngine.cpp
     Source/Engine/StaticTables.cpp
+    Source/Engine/WindowApplyQ24.cpp
 )
 
 target_include_directories(PitchLabEngine PUBLIC
@@ -33,6 +40,10 @@ target_include_directories(PitchLabEngine PUBLIC
 )
 
 target_compile_features(PitchLabEngine PUBLIC cxx_std_20)
+
+target_link_libraries(PitchLabEngine PUBLIC
+    juce::juce_dsp
+)
 
 if(WIN32)
     target_compile_definitions(PitchLabEngine PRIVATE
@@ -55,9 +66,13 @@ juce_add_gui_app(TinyPitchHost
 )
 
 target_sources(TinyPitchHost PRIVATE
+    Source/App/CpuVisualizerHost.cpp
+    Source/App/LegacyGLBatcher.cpp
     Source/App/Main.cpp
     Source/App/MainComponent.cpp
     Source/App/OpenGLVisualizerHost.cpp
+    Source/App/SharedWaterfallRing.cpp
+    Source/Tools/VizExport/VizCpuRenderer.cpp
 )
 
 target_link_libraries(TinyPitchHost PRIVATE
@@ -75,6 +90,7 @@ juce_generate_juce_header(TinyPitchHost)
 
 target_include_directories(TinyPitchHost PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/App"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Tools/VizExport"
 )
 
 target_compile_definitions(TinyPitchHost PRIVATE
@@ -99,6 +115,36 @@ endif()
 
 if(WIN32)
     target_link_libraries(TinyPitchHost PRIVATE opengl32)
+endif()
+
+add_executable(PitchLabVizExport
+    Source/Tools/VizExport/main.cpp
+    Source/Tools/VizExport/VizCpuRenderer.cpp
+)
+
+target_include_directories(PitchLabVizExport PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Engine"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Tools/VizExport"
+)
+
+target_compile_features(PitchLabVizExport PRIVATE cxx_std_20)
+
+target_link_libraries(PitchLabVizExport PRIVATE
+    PitchLabEngine
+    juce::juce_audio_formats
+    juce::juce_graphics
+    juce::juce_recommended_warning_flags
+)
+
+if(WIN32)
+    target_compile_definitions(PitchLabVizExport PRIVATE
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
+
+if(MSVC)
+    target_compile_options(PitchLabVizExport PRIVATE /FS)
 endif()
 
 enable_testing()
