@@ -8,7 +8,7 @@ TEST(PitchLabEngine, PrepareCreatesTablesAndResetClearsIngress)
     pitchlab::PitchLabEngine eng;
     eng.prepareToPlay (48000.0, 256);
     ASSERT_NE(eng.tables(), nullptr);
-    EXPECT_EQ(eng.tables()->hanningWindowQ24().size(), 4096u);
+    EXPECT_EQ(eng.tables()->hanningWindowQ24().size(), 8192u);
 
     const float c0[] = { 0.5f, 0.5f };
     const float* ch[] = { c0 };

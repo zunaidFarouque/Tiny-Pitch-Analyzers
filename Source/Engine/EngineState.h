@@ -26,7 +26,7 @@ struct EngineState
     float currentHz = 0.0f;
     float tuningError = 0.0f; // roadmap ~0xB08 — cents vs nearest tempered semitone
 
-    int fftSize = 4096;
+    int fftSize = 8192;
     double sampleRate = 44100.0;
     int audioBufferSize = 512;
 

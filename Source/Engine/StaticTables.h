@@ -12,7 +12,7 @@ namespace pitchlab
 class StaticTables
 {
 public:
-    explicit StaticTables (int fftSize = 4096);
+    explicit StaticTables (int fftSize = 8192);
 
     [[nodiscard]] std::size_t dbBrightnessSize() const noexcept { return dbBrightness_.size(); }
     [[nodiscard]] std::uint8_t dbBrightness (std::size_t amplitudeIndex) const noexcept;

@@ -50,6 +50,7 @@ private:
     void playPauseClicked();
     void toggleInputClicked();
     void positionSliderChanged();
+    void fftSizeChanged();
     void updatePositionFromTransport();
     void updateDeviceAndPeakLabels();
     void visualizationModeChanged();
@@ -73,6 +74,16 @@ private:
     juce::TextButton playPauseButton_ { "Play" };
     juce::TextButton inputToggleButton_ { "Input: Mic" };
     juce::Slider positionSlider_;
+    juce::ComboBox fftSizeCombo_;
+    juce::Label fftSizeLabel_;
+    double sampleRate_ { 0.0 };
+    int samplesPerBlockExpected_ { 0 };
+    juce::Slider waterfallEnergyScaleSlider_;
+    juce::Slider waterfallAlphaPowerSlider_;
+    juce::Slider waterfallAlphaThresholdSlider_;
+    juce::Label waterfallEnergyScaleLabel_;
+    juce::Label waterfallAlphaPowerLabel_;
+    juce::Label waterfallAlphaThresholdLabel_;
     juce::Label statusLabel_;
     juce::Label engineLabel_;
     juce::ComboBox vizModeCombo_;

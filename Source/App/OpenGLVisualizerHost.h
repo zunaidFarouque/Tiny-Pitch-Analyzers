@@ -8,6 +8,7 @@
 #include "SharedWaterfallRing.h"
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <span>
 
@@ -38,6 +39,11 @@ public:
     void setMode (VisualizationMode m) noexcept override { mode_ = m; }
     [[nodiscard]] VisualizationMode mode() const noexcept override { return mode_; }
     [[nodiscard]] bool isBackendHealthy() const noexcept { return backendHealthy_; }
+
+    // Waterfall tuning: grayscale-only mode uses these to shape brightness + noise gating.
+    void setWaterfallEnergyScale (float s) noexcept;
+    void setWaterfallAlphaPower (float p) noexcept;
+    void setWaterfallAlphaThreshold (float t) noexcept;
 
     /** Film reel dimensions (New Plan §4.3). */
     static constexpr int kFilmWidth = 1024;
@@ -87,6 +93,10 @@ private:
     std::unique_ptr<juce::OpenGLShaderProgram::Attribute> waterfallTexColorAttrib_;
     std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallTexSamplerUniform_;
 
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallEnergyScaleUniform_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallAlphaPowerUniform_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallAlphaThresholdUniform_;
+
     GLuint lineVbo_ = 0;
     GLuint waterfallVbo_ = 0;
     GLuint dynamicVbo_ = 0;
@@ -99,6 +109,10 @@ private:
     SharedWaterfallRing waterfallRing_;
     juce::CriticalSection frameLock_;
     bool backendHealthy_ = false;
+
+    std::atomic<float> waterfallEnergyScale_ { 0.03f };
+    std::atomic<float> waterfallAlphaPower_ { 1.0f };
+    std::atomic<float> waterfallAlphaThreshold_ { 0.0050f };
 
     juce::Image axisOverlayImage_;
     bool axisOverlayDirty_ = true;

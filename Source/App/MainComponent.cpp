@@ -50,6 +50,14 @@ MainComponent::MainComponent()
     addAndMakeVisible (playPauseButton_);
     addAndMakeVisible (inputToggleButton_);
     addAndMakeVisible (positionSlider_);
+    addAndMakeVisible (fftSizeLabel_);
+    addAndMakeVisible (fftSizeCombo_);
+    addAndMakeVisible (waterfallEnergyScaleSlider_);
+    addAndMakeVisible (waterfallAlphaPowerSlider_);
+    addAndMakeVisible (waterfallAlphaThresholdSlider_);
+    addAndMakeVisible (waterfallEnergyScaleLabel_);
+    addAndMakeVisible (waterfallAlphaPowerLabel_);
+    addAndMakeVisible (waterfallAlphaThresholdLabel_);
     addAndMakeVisible (statusLabel_);
     addAndMakeVisible (engineLabel_);
     addAndMakeVisible (vizModeCombo_);
@@ -102,6 +110,44 @@ MainComponent::MainComponent()
     positionSlider_.textFromValueFunction = [] (double secs) { return juce::String (secs, 2) + " s"; };
     positionSlider_.onValueChange = [this] { positionSliderChanged(); };
 
+    fftSizeLabel_.setText ("FFT", juce::dontSendNotification);
+    fftSizeCombo_.addItem ("1024", 1024);
+    fftSizeCombo_.addItem ("2048", 2048);
+    fftSizeCombo_.addItem ("4096", 4096);
+    fftSizeCombo_.addItem ("8192", 8192);
+    fftSizeCombo_.setSelectedId (engine_.state().fftSize, juce::dontSendNotification);
+    fftSizeCombo_.onChange = [this] { fftSizeChanged(); };
+
+    waterfallEnergyScaleLabel_.setText ("W-Energy", juce::dontSendNotification);
+    waterfallAlphaPowerLabel_.setText ("W-AlphaPow", juce::dontSendNotification);
+    waterfallAlphaThresholdLabel_.setText ("W-Thresh", juce::dontSendNotification);
+
+    waterfallEnergyScaleSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    waterfallAlphaPowerSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    waterfallAlphaThresholdSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+
+    waterfallEnergyScaleSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
+    waterfallAlphaPowerSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
+    waterfallAlphaThresholdSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
+
+    waterfallEnergyScaleSlider_.setRange (0.001f, 0.2f, 0.001f);
+    waterfallAlphaPowerSlider_.setRange (0.1f, 4.0f, 0.05f);
+    waterfallAlphaThresholdSlider_.setRange (0.0f, 0.05f, 0.0005f);
+
+    waterfallEnergyScaleSlider_.setValue (0.03, juce::dontSendNotification);
+    waterfallAlphaPowerSlider_.setValue (1.0, juce::dontSendNotification);
+    waterfallAlphaThresholdSlider_.setValue (0.0050, juce::dontSendNotification);
+
+    waterfallEnergyScaleSlider_.onValueChange = [this] {
+        openGlHost_.setWaterfallEnergyScale ((float) waterfallEnergyScaleSlider_.getValue());
+    };
+    waterfallAlphaPowerSlider_.onValueChange = [this] {
+        openGlHost_.setWaterfallAlphaPower ((float) waterfallAlphaPowerSlider_.getValue());
+    };
+    waterfallAlphaThresholdSlider_.onValueChange = [this] {
+        openGlHost_.setWaterfallAlphaThreshold ((float) waterfallAlphaThresholdSlider_.getValue());
+    };
+
     statusLabel_.setJustificationType (juce::Justification::centredLeft);
     engineLabel_.setJustificationType (juce::Justification::centredLeft);
     engineLabel_.setFont (juce::FontOptions { 13.0f });
@@ -121,6 +167,8 @@ MainComponent::~MainComponent()
 
 void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
 {
+    sampleRate_ = sampleRate;
+    samplesPerBlockExpected_ = samplesPerBlockExpected;
     engine_.prepareToPlay (sampleRate, samplesPerBlockExpected);
     openGlHost_.setStaticTablesPtr (engine_.tables());
     cpuHost_.setStaticTablesPtr (engine_.tables());
@@ -223,6 +271,26 @@ void MainComponent::resized()
     row2.removeFromRight (8);
     audioDeviceLabel_.setBounds (row2.reduced (0, 2));
     r.removeFromTop (6);
+
+    auto fftRow = r.removeFromTop (22);
+    fftSizeLabel_.setBounds (fftRow.removeFromLeft (90).reduced (0, 2));
+    fftSizeCombo_.setBounds (fftRow.reduced (0, 2));
+
+    auto ctrlRow = r.removeFromTop (56);
+    const int segW = ctrlRow.getWidth() / 3;
+
+    auto seg0 = ctrlRow.removeFromLeft (segW);
+    waterfallEnergyScaleLabel_.setBounds (seg0.removeFromTop (14));
+    waterfallEnergyScaleSlider_.setBounds (seg0.reduced (0, 2));
+
+    auto seg1 = ctrlRow.removeFromLeft (segW);
+    waterfallAlphaPowerLabel_.setBounds (seg1.removeFromTop (14));
+    waterfallAlphaPowerSlider_.setBounds (seg1.reduced (0, 2));
+
+    // Remaining width in case of rounding
+    auto seg2 = ctrlRow;
+    waterfallAlphaThresholdLabel_.setBounds (seg2.removeFromTop (14));
+    waterfallAlphaThresholdSlider_.setBounds (seg2.reduced (0, 2));
 
     positionSlider_.setBounds (r.removeFromTop (28));
     r.removeFromTop (8);
@@ -477,6 +545,23 @@ void MainComponent::positionSliderChanged()
 
     const juce::ScopedLock sl (transportLock_);
     transport_.setPosition (positionSlider_.getValue());
+}
+
+void MainComponent::fftSizeChanged()
+{
+    const int newFft = fftSizeCombo_.getSelectedId();
+    if (newFft <= 0)
+        return;
+    if (sampleRate_ <= 0.0 || samplesPerBlockExpected_ <= 0)
+        return;
+
+    engine_.reconfigureFftSize (newFft, sampleRate_, samplesPerBlockExpected_);
+
+    // Update visualizers with the rebuilt tables.
+    openGlHost_.setStaticTablesPtr (engine_.tables());
+    cpuHost_.setStaticTablesPtr (engine_.tables());
+    if (activeRenderer_ != nullptr)
+        activeRenderer_->setStaticTablesPtr (engine_.tables());
 }
 
 void MainComponent::updatePositionFromTransport()

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <span>
 #include <vector>
 
@@ -28,6 +29,9 @@ public:
     ~PitchLabEngine();
 
     void prepareToPlay (double sampleRate, int maxBlockSamples);
+    /** Rebuild FFT/tables/chroma mapping for a new FFT size.
+        Call from UI thread; safe against the audio thread via internal locking. */
+    void reconfigureFftSize (int newFftSize, double sampleRate, int maxBlockSamples);
     void reset();
 
     /** Non-interleaved float samples from JUCE callback; downmixes to mono int16 ingress. */
@@ -48,6 +52,7 @@ public:
 
 private:
     void runAnalysisChain() noexcept;
+    void prepareToPlayImpl (double sampleRate, int maxBlockSamples);
 
     EngineState state_;
     CircularInt16Buffer ingress_;
@@ -66,6 +71,9 @@ private:
     std::uint64_t frameSequence_ = 0;
 
     static constexpr std::size_t kIngressCapacity = 16384;
+
+    // Hot path readers (audio thread) take shared locks; reconfiguration takes exclusive.
+    mutable std::shared_mutex configMutex_;
 };
 
 } // namespace pitchlab

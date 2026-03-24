@@ -14,6 +14,7 @@ TEST(NullPipeline, Sine440HzBlockYieldsPitchAndChromaNearA)
     constexpr float f0 = 440.0f;
 
     pitchlab::PitchLabEngine eng;
+    eng.state().fftSize = 4096; // golden chroma slice bounds below are for 4096 FFT
     eng.prepareToPlay (sr, n);
     eng.state().setWindowKind (pitchlab::WindowKind::Hanning);
 

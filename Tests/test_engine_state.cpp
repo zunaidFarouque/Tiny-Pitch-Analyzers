@@ -5,7 +5,7 @@
 TEST(EngineState, DefaultFftAndSampleRate)
 {
     pitchlab::EngineState s;
-    EXPECT_EQ(s.fftSize, 4096);
+    EXPECT_EQ(s.fftSize, 8192);
     EXPECT_DOUBLE_EQ(s.sampleRate, 44100.0);
     EXPECT_FALSE(s.analysisDirty.load());
 }

@@ -50,6 +50,9 @@ void main()
 
 static constexpr char kWaterfallTexFrag[] = R"(
 uniform sampler2D tex;
+uniform float uEnergyScale;
+uniform float uAlphaPower;
+uniform float uAlphaThreshold;
 varying lowp vec2 vUV;
 varying lowp vec4 vCol;
 void main()
@@ -58,9 +61,11 @@ void main()
     // Intensity mapping (grayscale):
     // We intentionally use a conservative scale so "no pitch / white noise" stays dark
     // instead of clamping to pure white everywhere.
-    const float m = clamp (sqrt (max (e, 0.0)) * 0.03, 0.0, 1.0);
+    const float m = clamp (sqrt (max (e, 0.0)) * uEnergyScale, 0.0, 1.0);
     // More intense => brighter pixel.
-    const float alpha = m;
+    float alpha = pow (m, uAlphaPower);
+    // Suppress low-energy speckle/noise.
+    alpha = (alpha < uAlphaThreshold) ? 0.0 : alpha;
     // Monochrome waterfall: constant white RGB, intensity controls brightness via alpha.
     gl_FragColor = vec4 (1.0, 1.0, 1.0, alpha);
 }
@@ -107,16 +112,21 @@ void main()
 
 static constexpr char kWaterfallTexFrag[] = R"(#version 150 core
 uniform sampler2D tex;
+uniform float uEnergyScale;
+uniform float uAlphaPower;
+uniform float uAlphaThreshold;
 in vec2 vUV;
 in vec4 vCol;
 out vec4 fragColor;
 void main()
 {
     float e = texture (tex, vec2 (vUV.y, vUV.x)).r;
-    float m = clamp (sqrt (max (e, 0.0)) * 0.03, 0.0, 1.0);
+    float m = clamp (sqrt (max (e, 0.0)) * uEnergyScale, 0.0, 1.0);
     // PitchLab-style compositing: intensity drives alpha, not an always-on lane-color underlay.
     // Compress low energies so empty background stays near-black.
-    float alpha = m;
+    float alpha = pow (m, uAlphaPower);
+    // Suppress low-energy speckle/noise.
+    alpha = (alpha < uAlphaThreshold) ? 0.0 : alpha;
     // Monochrome waterfall: constant white RGB, intensity controls brightness via alpha.
     fragColor = vec4 (1.0, 1.0, 1.0, alpha);
 }
@@ -189,6 +199,10 @@ void OpenGLVisualizerHost::newOpenGLContextCreated()
     waterfallTexColorAttrib_ = std::make_unique<juce::OpenGLShaderProgram::Attribute> (*waterfallTexShader_, "color");
     waterfallTexSamplerUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "tex");
 
+    waterfallEnergyScaleUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uEnergyScale");
+    waterfallAlphaPowerUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uAlphaPower");
+    waterfallAlphaThresholdUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uAlphaThreshold");
+
     auto& gl = openGLContext_.extensions;
     gl.glGenBuffers (1, &lineVbo_);
     gl.glGenBuffers (1, &waterfallVbo_);
@@ -208,7 +222,24 @@ void OpenGLVisualizerHost::newOpenGLContextCreated()
                       && texColorAttrib_ != nullptr && texSamplerUniform_ != nullptr
                       && waterfallTexPosAttrib_ != nullptr && waterfallTexUvAttrib_ != nullptr
                       && waterfallTexColorAttrib_ != nullptr && waterfallTexSamplerUniform_ != nullptr
+                      && waterfallEnergyScaleUniform_ != nullptr && waterfallAlphaPowerUniform_ != nullptr
+                      && waterfallAlphaThresholdUniform_ != nullptr
                       && lineVbo_ != 0 && waterfallVbo_ != 0 && dynamicVbo_ != 0;
+}
+
+void OpenGLVisualizerHost::setWaterfallEnergyScale (float s) noexcept
+{
+    waterfallEnergyScale_.store (juce::jmax (0.0f, s), std::memory_order_relaxed);
+}
+
+void OpenGLVisualizerHost::setWaterfallAlphaPower (float p) noexcept
+{
+    waterfallAlphaPower_.store (juce::jmax (0.0f, p), std::memory_order_relaxed);
+}
+
+void OpenGLVisualizerHost::setWaterfallAlphaThreshold (float t) noexcept
+{
+    waterfallAlphaThreshold_.store (juce::jmax (0.0f, t), std::memory_order_relaxed);
 }
 
 void OpenGLVisualizerHost::openGLContextClosing()
@@ -273,6 +304,9 @@ void OpenGLVisualizerHost::openGLContextClosing()
     waterfallTexUvAttrib_.reset();
     waterfallTexColorAttrib_.reset();
     waterfallTexSamplerUniform_.reset();
+    waterfallEnergyScaleUniform_.reset();
+    waterfallAlphaPowerUniform_.reset();
+    waterfallAlphaThresholdUniform_.reset();
 }
 
 void OpenGLVisualizerHost::pushWaterfallRow (std::span<const float> row384)
@@ -469,6 +503,9 @@ void OpenGLVisualizerHost::renderWaterfall()
     juce::gl::glBindTexture (juce::gl::GL_TEXTURE_2D, waterfallTex_);
     waterfallTexShader_->use();
     waterfallTexSamplerUniform_->set (0);
+    waterfallEnergyScaleUniform_->set (waterfallEnergyScale_.load (std::memory_order_relaxed));
+    waterfallAlphaPowerUniform_->set (waterfallAlphaPower_.load (std::memory_order_relaxed));
+    waterfallAlphaThresholdUniform_->set (waterfallAlphaThreshold_.load (std::memory_order_relaxed));
 
     auto& gl = openGLContext_.extensions;
     gl.glBindBuffer (juce::gl::GL_ARRAY_BUFFER, waterfallVbo_);

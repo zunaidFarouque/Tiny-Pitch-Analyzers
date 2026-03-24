@@ -46,6 +46,12 @@ PitchLabEngine::~PitchLabEngine() = default;
 
 void PitchLabEngine::prepareToPlay (double sampleRate, int maxBlockSamples)
 {
+    std::unique_lock lk (configMutex_);
+    prepareToPlayImpl (sampleRate, maxBlockSamples);
+}
+
+void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
+{
     state_.sampleRate = sampleRate;
     state_.audioBufferSize = std::max (1, maxBlockSamples);
     conversionScratch_.resize (static_cast<std::size_t> (std::max (1, maxBlockSamples)));
@@ -69,6 +75,16 @@ void PitchLabEngine::prepareToPlay (double sampleRate, int maxBlockSamples)
         latestFrame_ = RenderFrameData {};
         frameSequence_ = 0;
     }
+}
+
+void PitchLabEngine::reconfigureFftSize (int newFftSize, double sampleRate, int maxBlockSamples)
+{
+    if (newFftSize <= 0)
+        return;
+
+    std::unique_lock lk (configMutex_);
+    state_.fftSize = newFftSize;
+    prepareToPlayImpl (sampleRate, maxBlockSamples);
 }
 
 void PitchLabEngine::reset()
@@ -145,6 +161,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
 
 void PitchLabEngine::processAudioInterleaved (const float* const* channelData, int numChannels, int numSamples)
 {
+    std::shared_lock lk (configMutex_);
     if (numSamples <= 0 || conversionScratch_.size() < static_cast<std::size_t> (numSamples))
         return;
 
