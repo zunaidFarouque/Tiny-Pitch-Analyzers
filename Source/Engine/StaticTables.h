@@ -14,7 +14,8 @@ class StaticTables
 public:
     explicit StaticTables (int fftSize = 8192);
 
-    [[nodiscard]] std::size_t dbBrightnessSize() const noexcept { return dbBrightness_.size(); }
+    static constexpr std::size_t kDbBrightnessLutSize = 32768;
+    [[nodiscard]] std::size_t dbBrightnessSize() const noexcept { return kDbBrightnessLutSize; }
     [[nodiscard]] std::uint8_t dbBrightness (std::size_t amplitudeIndex) const noexcept;
     [[nodiscard]] const std::array<std::uint8_t, 12 * 3>& spectralPaletteRgb() const noexcept { return spectralPaletteRgb_; }
     [[nodiscard]] std::size_t strobeSize() const noexcept { return strobeGradient_.size(); }
@@ -23,7 +24,6 @@ public:
     [[nodiscard]] const std::vector<std::int32_t>& gaussianWindowQ24() const noexcept { return gaussianQ24_; }
 
 private:
-    std::vector<std::uint8_t> dbBrightness_;
     std::array<std::uint8_t, 12 * 3> spectralPaletteRgb_{};
     std::vector<std::uint8_t> strobeGradient_;
     std::vector<std::int32_t> hanningQ24_;

@@ -1,6 +1,7 @@
 #include "StaticTables.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace pitchlab
@@ -17,6 +18,29 @@ namespace
     {
         const float c = std::round (std::clamp (x, -8.0f, 8.0f) * kQ24Scale);
         return static_cast<std::int32_t> (c);
+    }
+
+    /** Single process-wide LUT: linear amplitude index 0..32767 → display byte (log10 curve). */
+    [[nodiscard]] const std::array<std::uint8_t, 32768>& globalDbBrightnessLut() noexcept
+    {
+        static const std::array<std::uint8_t, 32768> table = [] {
+            std::array<std::uint8_t, 32768> out {};
+            for (std::size_t i = 0; i < out.size(); ++i)
+            {
+                if (i == 0)
+                {
+                    out[i] = 0;
+                    continue;
+                }
+                const float amp = static_cast<float> (i) / 32767.0f;
+                float db = 20.0f * std::log10 (amp);
+                db = std::clamp (db, -100.0f, 0.0f);
+                const float t = (db + 100.0f) / 100.0f;
+                out[i] = static_cast<std::uint8_t> (std::lround (t * 255.0f));
+            }
+            return out;
+        }();
+        return table;
     }
 } // namespace
 
@@ -48,21 +72,7 @@ void StaticTables::fillSpectralPalette (std::array<std::uint8_t, 12 * 3>& out)
 StaticTables::StaticTables (int fftSize)
 {
     fillSpectralPalette (spectralPaletteRgb_);
-
-    dbBrightness_.resize (32768);
-    for (std::size_t i = 0; i < dbBrightness_.size(); ++i)
-    {
-        if (i == 0)
-        {
-            dbBrightness_[i] = 0;
-            continue;
-        }
-        const float amp = static_cast<float> (i) / 32767.0f;
-        float db = 20.0f * std::log10 (amp);
-        db = std::clamp (db, -100.0f, 0.0f);
-        const float t = (db + 100.0f) / 100.0f;
-        dbBrightness_[i] = static_cast<std::uint8_t> (std::lround (t * 255.0f));
-    }
+    (void) globalDbBrightnessLut(); // ensure one-time init before any audio use
 
     constexpr int kStrobeWidth = 4096;
     constexpr float kStrobeScalar = 2.0f;
@@ -93,9 +103,10 @@ StaticTables::StaticTables (int fftSize)
 
 std::uint8_t StaticTables::dbBrightness (std::size_t amplitudeIndex) const noexcept
 {
-    if (amplitudeIndex >= dbBrightness_.size())
+    const auto& lut = globalDbBrightnessLut();
+    if (amplitudeIndex >= lut.size())
         return 0;
-    return dbBrightness_[amplitudeIndex];
+    return lut[amplitudeIndex];
 }
 
 std::uint8_t StaticTables::strobe (std::size_t i) const noexcept

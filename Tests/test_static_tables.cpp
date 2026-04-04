@@ -2,12 +2,31 @@
 
 #include "StaticTables.h"
 
+#include <cmath>
+
 TEST(StaticTables, DbBrightnessSizeAndEndpoints)
 {
     pitchlab::StaticTables t (4096);
     EXPECT_EQ(t.dbBrightnessSize(), 32768u);
     EXPECT_EQ(t.dbBrightness (0), 0u);
-    EXPECT_GE(t.dbBrightness (32767), 200u);
+    EXPECT_EQ(t.dbBrightness (32767), 255u);
+}
+
+TEST(StaticTables, DbBrightnessCurveIsLogarithmicNotLinearMidpoint)
+{
+    pitchlab::StaticTables t (8192);
+    const std::uint8_t logVal = t.dbBrightness (16384);
+    const auto linearMid =
+        static_cast<std::uint8_t> (std::lround (16384.0 * 255.0 / 32767.0));
+    EXPECT_GT(logVal, 200u);
+    EXPECT_NE(logVal, linearMid);
+}
+
+TEST(StaticTables, DbBrightnessLutSharedAcrossFftSizes)
+{
+    pitchlab::StaticTables a (512);
+    pitchlab::StaticTables b (8192);
+    EXPECT_EQ(a.dbBrightness (5000), b.dbBrightness (5000));
 }
 
 TEST(StaticTables, StrobeLength4096)
