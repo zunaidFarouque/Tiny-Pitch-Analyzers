@@ -119,10 +119,10 @@ private:
     std::atomic<bool> waterfallBulkUploadPending_ { false };
     bool backendHealthy_ = false;
 
-    std::atomic<float> waterfallEnergyScale_ { 0.064f };
-    std::atomic<float> waterfallAlphaPower_ { 2.55f };
+    std::atomic<float> waterfallEnergyScale_ { 1.0f };
+    std::atomic<float> waterfallAlphaPower_ { 20.0f };
     std::atomic<float> waterfallAlphaThreshold_ { 0.0050f };
-    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw_ { static_cast<std::uint8_t> (pitchlab::WaterfallDisplayCurveMode::Sqrt) };
+    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw_ { static_cast<std::uint8_t> (pitchlab::WaterfallDisplayCurveMode::Linear) };
     std::atomic<std::uint8_t> waterfallTextureFilterModeRaw_ { static_cast<std::uint8_t> (pitchlab::WaterfallTextureFilterMode::Nearest) };
 
     juce::Image axisOverlayImage_;

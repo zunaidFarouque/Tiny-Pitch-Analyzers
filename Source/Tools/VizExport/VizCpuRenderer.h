@@ -32,10 +32,10 @@ struct VizFrameData
 
 struct WaterfallRenderParams
 {
-    float energyScale = 0.064f;
-    float alphaPower = 2.55f;
+    float energyScale = 1.0f;
+    float alphaPower = 20.0f;
     float alphaThreshold = 0.0050f;
-    WaterfallDisplayCurveMode curveMode = WaterfallDisplayCurveMode::Sqrt;
+    WaterfallDisplayCurveMode curveMode = WaterfallDisplayCurveMode::Linear;
 };
 
 class VizCpuRenderer

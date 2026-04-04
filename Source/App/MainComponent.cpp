@@ -247,11 +247,11 @@ MainComponent::MainComponent()
     waterfallAlphaThresholdSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
 
     waterfallEnergyScaleSlider_.setRange (0.0f, 2.0f, 0.001f);
-    waterfallAlphaPowerSlider_.setRange (0.1f, 4.0f, 0.05f);
+    waterfallAlphaPowerSlider_.setRange (0.1f, 20.0f, 0.05f);
     waterfallAlphaThresholdSlider_.setRange (0.0f, 0.05f, 0.0005f);
 
-    waterfallEnergyScaleSlider_.setValue (0.064, juce::dontSendNotification);
-    waterfallAlphaPowerSlider_.setValue (2.55, juce::dontSendNotification);
+    waterfallEnergyScaleSlider_.setValue (1.0, juce::dontSendNotification);
+    waterfallAlphaPowerSlider_.setValue (20.0, juce::dontSendNotification);
     waterfallAlphaThresholdSlider_.setValue (0.0050, juce::dontSendNotification);
 
     waterfallEnergyScaleSlider_.onValueChange = [this] {
@@ -303,7 +303,7 @@ MainComponent::MainComponent()
     foldWeightCombo_.addItem ("Weight: Uniform", 1);
     foldWeightCombo_.addItem ("Weight: 1/h", 2);
     foldWeightCombo_.addItem ("Weight: 1/sqrt(h)", 3);
-    foldWeightCombo_.setSelectedId (3, juce::dontSendNotification);
+    foldWeightCombo_.setSelectedId (1, juce::dontSendNotification);
     foldWeightCombo_.onChange = [this] {
         const int id = foldWeightCombo_.getSelectedId();
         pitchlab::FoldHarmonicWeightMode m = pitchlab::FoldHarmonicWeightMode::InvSqrtH;
@@ -341,7 +341,7 @@ MainComponent::MainComponent()
     waterfallCurveCombo_.addItem ("Curve: Linear", 1);
     waterfallCurveCombo_.addItem ("Curve: Sqrt", 2);
     waterfallCurveCombo_.addItem ("Curve: Log dB", 3);
-    waterfallCurveCombo_.setSelectedId (2, juce::dontSendNotification);
+    waterfallCurveCombo_.setSelectedId (1, juce::dontSendNotification);
     waterfallCurveCombo_.onChange = [this] {
         pitchlab::WaterfallDisplayCurveMode m = pitchlab::WaterfallDisplayCurveMode::Sqrt;
         if (waterfallCurveCombo_.getSelectedId() == 1) m = pitchlab::WaterfallDisplayCurveMode::Linear;
@@ -436,6 +436,9 @@ MainComponent::MainComponent()
     waterfallFilterCombo_.onChange();
     waterfallCurveCombo_.onChange();
     chromaShapingCombo_.onChange();
+    foldInterpCombo_.onChange();
+    foldWeightCombo_.onChange();
+    foldOctavesCombo_.onChange();
     foldModelCombo_.onChange();
     spectralBackendCombo_.onChange();
     analysisRateCombo_.onChange();

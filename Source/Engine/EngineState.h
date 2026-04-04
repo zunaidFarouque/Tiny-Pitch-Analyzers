@@ -103,10 +103,10 @@ struct EngineState
     /** Chroma fold controls. */
     std::atomic<int> foldMaxOctaves { 0 }; // <=0 means auto (to Nyquist)
     std::atomic<std::uint8_t> foldInterpModeRaw { static_cast<std::uint8_t> (FoldInterpMode::Linear2Bin) };
-    std::atomic<std::uint8_t> foldHarmonicWeightModeRaw { static_cast<std::uint8_t> (FoldHarmonicWeightMode::InvSqrtH) };
+    std::atomic<std::uint8_t> foldHarmonicWeightModeRaw { static_cast<std::uint8_t> (FoldHarmonicWeightMode::Uniform) };
 
     /** Waterfall display/render controls (shared between UI and renderers). */
-    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw { static_cast<std::uint8_t> (WaterfallDisplayCurveMode::Sqrt) };
+    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw { static_cast<std::uint8_t> (WaterfallDisplayCurveMode::Linear) };
     std::atomic<std::uint8_t> waterfallTextureFilterModeRaw { static_cast<std::uint8_t> (WaterfallTextureFilterMode::Nearest) };
 
     std::atomic<std::uint8_t> chromaShapingModeRaw { static_cast<std::uint8_t> (ChromaShapingMode::NoiseFloorSubtract) };
