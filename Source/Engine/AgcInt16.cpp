@@ -23,7 +23,10 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window) noexcept
         aMax = std::max (aMax, bitwiseAbsInt16ToInt32 (s));
 
     if (aMax == 0)
+    {
+        std::fill (window.begin(), window.end(), static_cast<std::int16_t> (0));
         return;
+    }
 
     for (auto& s : window)
     {
@@ -53,7 +56,10 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float s
         aMax = std::max (aMax, bitwiseAbsInt16ToInt32 (s));
 
     if (aMax == 0)
+    {
+        std::fill (window.begin(), window.end(), static_cast<std::int16_t> (0));
         return;
+    }
 
     for (auto& s : window)
     {

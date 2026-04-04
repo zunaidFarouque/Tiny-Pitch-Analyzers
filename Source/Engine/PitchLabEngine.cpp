@@ -54,9 +54,13 @@ void PitchLabEngine::runFftOnChain (AnalysisChain& ch,
 
     ch.ingress_.copyLatestInto (std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) });
 
-    applyAgcInt16InPlace (std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) },
-                          state_.agcEnabled.load (std::memory_order_relaxed),
-                          state_.agcStrength.load (std::memory_order_relaxed));
+    const bool agcOn = state_.agcEnabled.load (std::memory_order_relaxed);
+    const float agcK = state_.agcStrength.load (std::memory_order_relaxed);
+    auto winSpan = std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) };
+    if (agcOn && agcK >= 0.999f)
+        applyAgcInt16InPlace (winSpan);
+    else
+        applyAgcInt16InPlace (winSpan, agcOn, agcK);
 
     applyHanningWindowQ24 (std::span<const std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) },
                            std::span<std::int16_t> { ch.windowed_.data(), static_cast<std::size_t> (n) },
