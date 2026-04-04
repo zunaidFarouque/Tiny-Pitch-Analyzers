@@ -110,6 +110,7 @@ private:
 
     std::vector<float> magForFold_;
     std::array<float, 384> chromaRow_ {};
+    std::array<float, 384> temporalChroma_ {};
     juce::dsp::IIR::Filter<float> highPassFilter_;
     juce::dsp::IIR::Filter<float> lfHighPassFilter_;
     float lastHighPassCutHz_ = -1.0f;

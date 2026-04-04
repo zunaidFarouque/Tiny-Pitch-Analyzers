@@ -3,6 +3,10 @@
 #include "PitchLabEngine.h"
 #include "StaticTables.h"
 
+#include <array>
+#include <numbers>
+#include <vector>
+
 TEST(PitchLabEngine, PrepareCreatesTablesAndResetClearsIngress)
 {
     pitchlab::PitchLabEngine eng;
@@ -46,4 +50,28 @@ TEST (PitchLabEngine, StftModeIgnoresLfIngress)
 #if defined(PITCHLAB_ENGINE_TESTING)
     EXPECT_EQ (eng.testLfIngress().writeHead(), l0);
 #endif
+}
+
+TEST (PitchLabEngine, CopyChroma384AfterAnalysisIsLutRangedZeroToOne)
+{
+    pitchlab::PitchLabEngine eng;
+    constexpr double sr = 44100.0;
+    constexpr int n = 4096;
+    eng.prepareToPlay (sr, n);
+
+    std::vector<float> mono (static_cast<std::size_t> (n));
+    for (int i = 0; i < n; ++i)
+        mono[static_cast<std::size_t> (i)] =
+            0.3f * std::sin (2.0f * std::numbers::pi_v<float> * 440.0f * static_cast<float> (i) / static_cast<float> (sr));
+
+    const float* ch[] = { mono.data() };
+    eng.processAudioInterleaved (ch, 1, n);
+
+    std::array<float, 384> row {};
+    eng.copyChromaRow384 (std::span<float> { row.data(), row.size() });
+    for (float v : row)
+    {
+        EXPECT_GE (v, 0.0f);
+        EXPECT_LE (v, 1.0f);
+    }
 }

@@ -55,6 +55,22 @@ void percentileGateInPlace (std::span<float> x) noexcept
 }
 } // namespace
 
+void accumulateLeakyPeakChroma384 (std::span<const float> frame384,
+                                   std::span<float> accumulator384,
+                                   float release) noexcept
+{
+    if (frame384.size() < 384 || accumulator384.size() < 384)
+        return;
+
+    const float r = std::clamp (release, 0.0f, 1.0f);
+    for (int i = 0; i < 384; ++i)
+    {
+        const float prev = accumulator384[static_cast<std::size_t> (i)] * r;
+        const float x = frame384[static_cast<std::size_t> (i)];
+        accumulator384[static_cast<std::size_t> (i)] = std::max (x, prev);
+    }
+}
+
 void applyChromaShaping384 (ChromaShapingMode mode, std::span<float> chroma384) noexcept
 {
     if (chroma384.size() < 384)

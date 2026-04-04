@@ -109,10 +109,13 @@ std::uint8_t StaticTables::dbBrightness (std::size_t amplitudeIndex) const noexc
     return lut[amplitudeIndex];
 }
 
-void StaticTables::fillDisplayChromaFromLinear384 (std::span<const float> linear384,
-                                                   std::span<float> outDisplay384) const noexcept
+namespace
 {
-    if (linear384.size() < 384 || outDisplay384.size() < 384)
+void mapChroma384ThroughDbLut (const StaticTables& tables,
+                               std::span<const float> linear384,
+                               std::span<float> out384) noexcept
+{
+    if (linear384.size() < 384 || out384.size() < 384)
         return;
 
     float mx = 0.0f;
@@ -126,16 +129,33 @@ void StaticTables::fillDisplayChromaFromLinear384 (std::span<const float> linear
     {
         if (gain <= 0.0f)
         {
-            outDisplay384[static_cast<std::size_t> (i)] = 0.0f;
+            out384[static_cast<std::size_t> (i)] = 0.0f;
             continue;
         }
 
         const float v = linear384[static_cast<std::size_t> (i)] * gain;
         const int idx = static_cast<int> (std::lround (v));
         const int clamped = std::clamp (idx, 0, 32767);
-        outDisplay384[static_cast<std::size_t> (i)] =
-            static_cast<float> (dbBrightness (static_cast<std::size_t> (clamped))) * (1.0f / 255.0f);
+        out384[static_cast<std::size_t> (i)] =
+            static_cast<float> (tables.dbBrightness (static_cast<std::size_t> (clamped))) * (1.0f / 255.0f);
     }
+}
+} // namespace
+
+void StaticTables::fillDisplayChromaFromLinear384 (std::span<const float> linear384,
+                                                   std::span<float> outDisplay384) const noexcept
+{
+    mapChroma384ThroughDbLut (*this, linear384, outDisplay384);
+}
+
+void StaticTables::applyDbBrightnessToChroma384InPlace (std::span<float> chroma384) const noexcept
+{
+    if (chroma384.size() < 384)
+        return;
+
+    mapChroma384ThroughDbLut (*this,
+                              std::span<const float> { chroma384.data(), static_cast<std::size_t> (384) },
+                              chroma384);
 }
 
 std::uint8_t StaticTables::strobe (std::size_t i) const noexcept

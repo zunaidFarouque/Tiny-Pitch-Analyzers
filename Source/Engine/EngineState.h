@@ -99,6 +99,11 @@ struct EngineState
     /** AGC controls. */
     std::atomic<bool> agcEnabled { true };
     std::atomic<float> agcStrength { 1.0f };
+    /** Peak abs int16 below this (exclusive) → zero window (squelch); <=0 disables gate. */
+    std::atomic<int> agcNoiseFloor { 150 };
+
+    /** Leaky-peak chroma trail: multiply prior row by this before max with new frame (0..1). */
+    std::atomic<float> temporalRelease { 0.85f };
 
     /** Chroma fold controls. */
     std::atomic<int> foldMaxOctaves { 0 }; // <=0 means auto (to Nyquist)

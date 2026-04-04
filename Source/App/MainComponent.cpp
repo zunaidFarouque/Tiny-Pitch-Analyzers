@@ -1036,6 +1036,8 @@ void MainComponent::syncOfflineEngineFromLive (double analysisSampleRate)
 
     O.agcEnabled.store (L.agcEnabled.load (std::memory_order_relaxed), std::memory_order_relaxed);
     O.agcStrength.store (L.agcStrength.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.agcNoiseFloor.store (L.agcNoiseFloor.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.temporalRelease.store (L.temporalRelease.load (std::memory_order_relaxed), std::memory_order_relaxed);
     O.setWindowKind (L.windowKind());
     O.setFoldInterpMode (L.foldInterpMode());
     O.setFoldHarmonicWeightMode (L.foldHarmonicWeightMode());

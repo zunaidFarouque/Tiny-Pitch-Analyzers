@@ -13,7 +13,7 @@ std::int32_t bitwiseAbsInt16ToInt32 (std::int16_t v) noexcept
     return (x ^ mask) - mask;
 }
 
-void applyAgcInt16InPlace (std::span<std::int16_t> window) noexcept
+void applyAgcInt16InPlace (std::span<std::int16_t> window, int noiseFloorAbs) noexcept
 {
     if (window.empty())
         return;
@@ -22,7 +22,7 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window) noexcept
     for (std::int16_t s : window)
         aMax = std::max (aMax, bitwiseAbsInt16ToInt32 (s));
 
-    if (aMax == 0)
+    if (aMax == 0 || (noiseFloorAbs > 0 && aMax < noiseFloorAbs))
     {
         std::fill (window.begin(), window.end(), static_cast<std::int16_t> (0));
         return;
@@ -36,7 +36,7 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window) noexcept
     }
 }
 
-void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float strength) noexcept
+void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float strength, int noiseFloorAbs) noexcept
 {
     if (! enabled || window.empty())
         return;
@@ -47,7 +47,7 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float s
 
     if (k >= 0.999f)
     {
-        applyAgcInt16InPlace (window);
+        applyAgcInt16InPlace (window, noiseFloorAbs);
         return;
     }
 
@@ -55,7 +55,7 @@ void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float s
     for (std::int16_t s : window)
         aMax = std::max (aMax, bitwiseAbsInt16ToInt32 (s));
 
-    if (aMax == 0)
+    if (aMax == 0 || (noiseFloorAbs > 0 && aMax < noiseFloorAbs))
     {
         std::fill (window.begin(), window.end(), static_cast<std::int16_t> (0));
         return;

@@ -56,11 +56,12 @@ void PitchLabEngine::runFftOnChain (AnalysisChain& ch,
 
     const bool agcOn = state_.agcEnabled.load (std::memory_order_relaxed);
     const float agcK = state_.agcStrength.load (std::memory_order_relaxed);
+    const int agcFloor = state_.agcNoiseFloor.load (std::memory_order_relaxed);
     auto winSpan = std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) };
     if (agcOn && agcK >= 0.999f)
-        applyAgcInt16InPlace (winSpan);
+        applyAgcInt16InPlace (winSpan, agcFloor);
     else
-        applyAgcInt16InPlace (winSpan, agcOn, agcK);
+        applyAgcInt16InPlace (winSpan, agcOn, agcK, agcFloor);
 
     applyHanningWindowQ24 (std::span<const std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) },
                            std::span<std::int16_t> { ch.windowed_.data(), static_cast<std::size_t> (n) },
@@ -236,6 +237,7 @@ void PitchLabEngine::reset()
     state_.viewScrollX = 0.0f;
     state_.strobePhase = 0.0f;
     chromaRow_.fill (0.0f);
+    temporalChroma_.fill (0.0f);
     analysisDecimationCounter_ = 0;
     lfAnalysisDecimationCounter_ = 0;
     highPassFilter_.reset();
@@ -316,6 +318,9 @@ void PitchLabEngine::runAnalysisChain() noexcept
     applyChromaShaping384 (state_.chromaShapingMode(),
                            std::span<float> { chromaRow_.data(), chromaRow_.size() });
 
+    // Log LUT on linear shaped chroma; chord path uses this compressed domain.
+    hfChain_.tables_->applyDbBrightnessToChroma384InPlace (std::span<float> { chromaRow_.data(), chromaRow_.size() });
+
     const float peakBin = refinedPeakBin (std::span<const float> { magForFold_.data(), magForFold_.size() });
     state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, virtualN);
     state_.tuningError = centsVsTempered (state_.currentHz);
@@ -330,8 +335,10 @@ void PitchLabEngine::runAnalysisChain() noexcept
 
     RenderFrameData snap;
     hfChain_.ingress_.copyLatestInto (std::span<std::int16_t> { snap.waveform.data(), snap.waveform.size() });
-    hfChain_.tables_->fillDisplayChromaFromLinear384 (std::span<const float> { chromaRow_.data(), chromaRow_.size() },
-                                                      std::span<float> { snap.chromaRow.data(), snap.chromaRow.size() });
+    accumulateLeakyPeakChroma384 (std::span<const float> { chromaRow_.data(), chromaRow_.size() },
+                                  std::span<float> { temporalChroma_.data(), temporalChroma_.size() },
+                                  state_.temporalRelease.load (std::memory_order_relaxed));
+    std::copy (temporalChroma_.begin(), temporalChroma_.end(), snap.chromaRow.begin());
     std::copy (state_.chordProbabilities.begin(), state_.chordProbabilities.end(), snap.chordProbabilities.begin());
     snap.currentHz = state_.currentHz;
     snap.tuningError = state_.tuningError;
@@ -395,7 +402,7 @@ void PitchLabEngine::copyChromaRow384 (std::span<float> dst) const noexcept
 {
     const int n = (std::min) (static_cast<int> (dst.size()), 384);
     for (int i = 0; i < n; ++i)
-        dst[static_cast<std::size_t> (i)] = chromaRow_[static_cast<std::size_t> (i)];
+        dst[static_cast<std::size_t> (i)] = temporalChroma_[static_cast<std::size_t> (i)];
 }
 
 void PitchLabEngine::copyLatestRenderFrame (RenderFrameData& dst) const noexcept
