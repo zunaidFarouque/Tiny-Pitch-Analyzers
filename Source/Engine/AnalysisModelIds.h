@@ -10,6 +10,7 @@ inline constexpr const char* kUiFoldIntegerHarmonics = "Fold: k * f0 integer v0.
 inline constexpr const char* kUiSpectrumStft = "Spectrum: STFT v1.0";
 inline constexpr const char* kUiSpectrumConstQApprox = "Spectrum: Const-Q approx v0.1";
 inline constexpr const char* kUiSpectrumVarQApprox = "Spectrum: Var-Q approx v0.1";
+inline constexpr const char* kUiSpectrumMultiResStft = "Spectrum: Multi-res STFT v1.0";
 
 inline constexpr const char* kUiChromaShapeNone = "Chroma: off";
 inline constexpr const char* kUiChromaShapeLog = "Chroma: log compress";

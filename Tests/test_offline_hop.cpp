@@ -27,3 +27,22 @@ TEST(PitchLabEngine, OfflineWindowAnalysisIsDeterministic)
 
     EXPECT_GT (a.sequence, 0u);
 }
+
+TEST (PitchLabEngine, OfflineWindowFillsChromaWhenMultiResBackendSelected)
+{
+    pitchlab::PitchLabEngine eng;
+    constexpr int fft = 1024;
+    eng.state().fftSize = fft;
+    eng.state().setSpectralBackendMode (pitchlab::SpectralBackendMode::MultiResSTFT_v1_0);
+    eng.prepareToPlay (48000.0, fft);
+
+    std::vector<float> win (static_cast<std::size_t> (fft), 0.2f);
+    pitchlab::RenderFrameData out {};
+    eng.analyzeOfflineWindowFromMonoFloat (std::span<const float> { win.data(), win.size() }, out);
+
+    float sum = 0.0f;
+    for (float c : out.chromaRow)
+        sum += c;
+    EXPECT_GT (sum, 1.0e-6f);
+    EXPECT_EQ (eng.state().spectralBackendMode(), pitchlab::SpectralBackendMode::MultiResSTFT_v1_0);
+}

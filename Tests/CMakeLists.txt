@@ -6,6 +6,10 @@ add_executable(PitchLabEngineTests
     test_chroma_map.cpp
     test_chroma_post.cpp
     test_copy_latest.cpp
+    test_decimator.cpp
+    test_multi_res_ingress.cpp
+    test_multires_engine_smoke.cpp
+    test_spectrum_stitching.cpp
     test_circular_buffer.cpp
     test_engine_state.cpp
     test_fft_chroma.cpp
@@ -30,6 +34,8 @@ target_link_libraries(PitchLabEngineTests PRIVATE
     GTest::gtest_main
 )
 
+add_dependencies(PitchLabEngineTests PitchLabVizExport)
+
 target_include_directories(PitchLabEngineTests PRIVATE
     "${CMAKE_SOURCE_DIR}/Source/App"
     "${CMAKE_SOURCE_DIR}/Source/Tools/VizExport"
@@ -37,6 +43,7 @@ target_include_directories(PitchLabEngineTests PRIVATE
 
 target_compile_definitions(PitchLabEngineTests PRIVATE
     "PITCHLAB_VIZ_EXPORT_EXE=\"$<TARGET_FILE:PitchLabVizExport>\""
+    PITCHLAB_ENGINE_TESTING=1
 )
 
 target_compile_features(PitchLabEngineTests PRIVATE cxx_std_20)

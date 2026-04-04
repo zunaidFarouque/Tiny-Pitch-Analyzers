@@ -61,7 +61,8 @@ enum class SpectralBackendMode : std::uint8_t
 {
     STFT_v1_0 = 0,
     ConstQApprox_v0_1 = 1,
-    VariableQApprox_v0_1 = 2
+    VariableQApprox_v0_1 = 2,
+    MultiResSTFT_v1_0 = 3
 };
 
 /** Logical fields aligned with New Plan §2.1 offset map (names, not packed binary layout). */

@@ -26,9 +26,11 @@ add_library(PitchLabEngine STATIC
     Source/Engine/ChromaFolder.cpp
     Source/Engine/ChromaMap.cpp
     Source/Engine/CircularInt16Buffer.cpp
+    Source/Engine/Decimator4x.cpp
     Source/Engine/EngineState.cpp
     Source/Engine/FloatIngress.cpp
     Source/Engine/FftMagnitudes.cpp
+    Source/Engine/MultiResSpectrumStitch.cpp
     Source/Engine/PitchLabChord.cpp
     Source/Engine/PitchFromSpectrum.cpp
     Source/Engine/PitchLabEngine.cpp

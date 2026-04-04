@@ -2,6 +2,7 @@
 
 #include "ChromaMap.h"
 #include "CircularInt16Buffer.h"
+#include "Decimator4x.h"
 #include "EngineState.h"
 #include "RenderFrameData.h"
 
@@ -56,37 +57,68 @@ public:
 
     [[nodiscard]] const EngineState& state() const noexcept { return state_; }
     [[nodiscard]] EngineState& state() noexcept { return state_; }
-    [[nodiscard]] const StaticTables* tables() const noexcept { return tables_.get(); }
-    [[nodiscard]] const CircularInt16Buffer& ingressBuffer() const noexcept { return ingress_; }
+    [[nodiscard]] const StaticTables* tables() const noexcept { return hfChain_.tables_.get(); }
+    [[nodiscard]] const CircularInt16Buffer& ingressBuffer() const noexcept { return hfChain_.ingress_; }
+
+#if defined(PITCHLAB_ENGINE_TESTING)
+    [[nodiscard]] const CircularInt16Buffer& testHfIngress() const noexcept { return hfChain_.ingress_; }
+    [[nodiscard]] const CircularInt16Buffer& testLfIngress() const noexcept { return lfChain_.ingress_; }
+#endif
 
 private:
+    struct AnalysisChain
+    {
+        static constexpr std::size_t kIngressCapacity = 65536;
+
+        CircularInt16Buffer ingress_;
+        std::unique_ptr<StaticTables> tables_;
+        std::unique_ptr<FftMagnitudes> fft_;
+        std::vector<std::int16_t> timeWindow_;
+        std::vector<std::int16_t> windowed_;
+        std::vector<float> floatFftIn_;
+        std::vector<float> magSpectrum_;
+        int fftSize_ = 0;
+        double sampleRate_ = 0.0;
+
+        explicit AnalysisChain();
+
+        void prepare (int fftSize, double sampleRate, int maxBlockSamples);
+    };
+
+    void runFftOnChain (AnalysisChain& ch,
+                        juce::dsp::IIR::Filter<float>& hpFilter,
+                        float& lastHpCut,
+                        double& lastHpSr) noexcept;
+
     void runAnalysisChain() noexcept;
     void prepareToPlayImpl (double sampleRate, int maxBlockSamples);
 
+    [[nodiscard]] int lfFftSizeForPrepare (int hfFftSize) const noexcept;
+
     EngineState state_;
-    CircularInt16Buffer ingress_;
+    AnalysisChain hfChain_;
+    AnalysisChain lfChain_;
+    Decimator4x decimator_;
     std::vector<std::int16_t> conversionScratch_;
-    std::unique_ptr<StaticTables> tables_;
-    std::unique_ptr<FftMagnitudes> fft_;
+    std::vector<float> decimatorFloatScratch_;
+    std::vector<float> decimatorFloatOutScratch_;
+    std::vector<std::int16_t> decimatorInt16Scratch_;
     ChromaMap chromaMap_;
 
-    std::vector<std::int16_t> timeWindow_;
-    std::vector<std::int16_t> windowed_;
-    std::vector<float> floatFftIn_;
-    std::vector<float> magSpectrum_;
     std::vector<float> magForFold_;
     std::array<float, 384> chromaRow_ {};
     juce::dsp::IIR::Filter<float> highPassFilter_;
+    juce::dsp::IIR::Filter<float> lfHighPassFilter_;
     float lastHighPassCutHz_ = -1.0f;
     double lastHighPassSr_ = 0.0;
+    float lastLfHighPassCutHz_ = -1.0f;
+    double lastLfHighPassSr_ = 0.0;
     int analysisDecimationCounter_ = 0;
+    int lfAnalysisDecimationCounter_ = 0;
     mutable std::mutex frameMutex_;
     RenderFrameData latestFrame_{};
     std::uint64_t frameSequence_ = 0;
 
-    static constexpr std::size_t kIngressCapacity = 65536;
-
-    // Hot path readers (audio thread) take shared locks; reconfiguration takes exclusive.
     mutable std::shared_mutex configMutex_;
 };
 

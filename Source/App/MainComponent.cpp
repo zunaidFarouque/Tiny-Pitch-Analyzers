@@ -113,6 +113,14 @@ void readMonoFloatWindow (juce::AudioFormatReader& reader,
         dst[static_cast<std::size_t> (dstOffset + i)] = s / static_cast<float> (numCh);
     }
 }
+
+[[nodiscard]] juce::File getAudioDeviceSettingsFile()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                   .getChildFile ("TinyPitchAnalyzer");
+    (void) dir.createDirectory();
+    return dir.getChildFile ("audio_device.xml");
+}
 } // namespace
 
 MainComponent::MainComponent()
@@ -151,6 +159,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (vizModeCombo_);
     addAndMakeVisible (windowKindCombo_);
     addAndMakeVisible (backendCombo_);
+    addAndMakeVisible (audioSettingsButton_);
     addAndMakeVisible (audioDeviceLabel_);
     addAndMakeVisible (peakLabel_);
     addAndMakeVisible (instantPreviewToggle_);
@@ -198,6 +207,8 @@ MainComponent::MainComponent()
     renderBackendPolicy_ = RenderBackendPolicy::ForceGpu;
     activeRenderer_->setMode (VisualizationMode::Waterfall);
     cpuHost_.setMode (VisualizationMode::Waterfall);
+
+    audioSettingsButton_.onClick = [this] { audioSettingsClicked(); };
 
     audioDeviceLabel_.setJustificationType (juce::Justification::centredLeft);
     peakLabel_.setJustificationType (juce::Justification::centredRight);
@@ -371,11 +382,13 @@ MainComponent::MainComponent()
     spectralBackendCombo_.addItem (pitchlab::kUiSpectrumStft, 1);
     spectralBackendCombo_.addItem (pitchlab::kUiSpectrumConstQApprox, 2);
     spectralBackendCombo_.addItem (pitchlab::kUiSpectrumVarQApprox, 3);
+    spectralBackendCombo_.addItem (pitchlab::kUiSpectrumMultiResStft, 4);
     spectralBackendCombo_.setSelectedId (1, juce::dontSendNotification);
     spectralBackendCombo_.onChange = [this] {
         pitchlab::SpectralBackendMode m = pitchlab::SpectralBackendMode::STFT_v1_0;
         if (spectralBackendCombo_.getSelectedId() == 2) m = pitchlab::SpectralBackendMode::ConstQApprox_v0_1;
         else if (spectralBackendCombo_.getSelectedId() == 3) m = pitchlab::SpectralBackendMode::VariableQApprox_v0_1;
+        else if (spectralBackendCombo_.getSelectedId() == 4) m = pitchlab::SpectralBackendMode::MultiResSTFT_v1_0;
         engine_.state().setSpectralBackendMode (m);
         bumpInstantPreviewDebounced();
     };
@@ -427,7 +440,9 @@ MainComponent::MainComponent()
 
     setSize (800, 680);
     startTimerHz (30);
-    setAudioChannels (2, 2);
+
+    std::unique_ptr<juce::XmlElement> savedAudioState = juce::parseXML (getAudioDeviceSettingsFile());
+    setAudioChannels (2, 2, savedAudioState.get());
 
     refreshExampleAudioList();
 
@@ -438,6 +453,7 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    saveAudioDeviceState();
     instantScrollBar_.removeListener (this);
     ++instantJobGeneration_;
     stopTimer();
@@ -564,6 +580,8 @@ void MainComponent::resized()
     row2.removeFromRight (8);
     instantPreviewToggle_.setBounds (row2.removeFromRight (200).reduced (0, 2));
     row2.removeFromRight (8);
+    audioSettingsButton_.setBounds (row2.removeFromRight (76).reduced (0, 2));
+    row2.removeFromRight (6);
     audioDeviceLabel_.setBounds (row2.reduced (0, 2));
     r.removeFromTop (6);
 
@@ -679,6 +697,48 @@ void MainComponent::updateDeviceAndPeakLabels()
     audioPeakHold_.store (v * 0.9f, std::memory_order_relaxed);
     const float db = 20.0f * std::log10 (juce::jmax (1.0e-6f, v));
     peakLabel_.setText (juce::String (db, 1) + " dBFS", juce::dontSendNotification);
+}
+
+void MainComponent::saveAudioDeviceState() const
+{
+    if (auto xml = deviceManager.createStateXml())
+        (void) xml->writeTo (getAudioDeviceSettingsFile());
+}
+
+void MainComponent::audioSettingsClicked()
+{
+    auto* audioSettingsComp = new juce::AudioDeviceSelectorComponent (deviceManager,
+                                                                      0,
+                                                                      2,
+                                                                      0,
+                                                                      2,
+                                                                      false,
+                                                                      false,
+                                                                      true,
+                                                                      true);
+
+    audioSettingsComp->setSize (500, 450);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (audioSettingsComp);
+    o.dialogTitle = "Audio settings";
+    o.componentToCentreAround = this;
+    o.dialogBackgroundColour = getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId);
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+
+    if (auto* w = o.create())
+    {
+        const juce::Component::SafePointer<MainComponent> safeThis (this);
+
+        w->enterModalState (true,
+                            juce::ModalCallbackFunction::create ([safeThis] (int) {
+                                if (safeThis != nullptr)
+                                    safeThis->saveAudioDeviceState();
+                            }),
+                            true);
+    }
 }
 
 void MainComponent::visualizationModeChanged()

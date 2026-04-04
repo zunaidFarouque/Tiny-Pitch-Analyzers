@@ -62,6 +62,8 @@ private:
     void fftSizeChanged();
     void updatePositionFromTransport();
     void updateDeviceAndPeakLabels();
+    void audioSettingsClicked();
+    void saveAudioDeviceState() const;
     void visualizationModeChanged();
     void renderBackendPolicyChanged();
     void syncRendererBackend();
@@ -132,6 +134,7 @@ private:
     juce::ComboBox vizModeCombo_;
     juce::ComboBox windowKindCombo_;
     juce::ComboBox backendCombo_;
+    juce::TextButton audioSettingsButton_ { "Audio..." };
     juce::Label audioDeviceLabel_;
     juce::Label peakLabel_;
     juce::ToggleButton instantPreviewToggle_ { "Instant full-file waterfall" };

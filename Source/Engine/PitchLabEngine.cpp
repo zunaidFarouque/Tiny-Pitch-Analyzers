@@ -6,6 +6,7 @@
 #include "ChromaPostProcess.h"
 #include "FftMagnitudes.h"
 #include "FloatIngress.h"
+#include "MultiResSpectrumStitch.h"
 #include "PitchFromSpectrum.h"
 #include "PitchLabChord.h"
 #include "SpectralMagSmear.h"
@@ -32,19 +33,114 @@ namespace
 
     return -1;
 }
+
 } // namespace
+
+void PitchLabEngine::runFftOnChain (AnalysisChain& ch,
+                                  juce::dsp::IIR::Filter<float>& hpFilter,
+                                  float& lastHpCut,
+                                  double& lastHpSr) noexcept
+{
+    if (ch.fft_ == nullptr || ch.tables_ == nullptr)
+        return;
+
+    const int n = ch.fftSize_;
+    const std::vector<std::int32_t>& win = (state_.windowKind() == WindowKind::Gaussian)
+                                               ? ch.tables_->gaussianWindowQ24()
+                                               : ch.tables_->hanningWindowQ24();
+    if ((int) win.size() < n)
+        return;
+
+    ch.ingress_.copyLatestInto (std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) });
+
+    applyAgcInt16InPlace (std::span<std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) },
+                          state_.agcEnabled.load (std::memory_order_relaxed),
+                          state_.agcStrength.load (std::memory_order_relaxed));
+
+    applyHanningWindowQ24 (std::span<const std::int16_t> { ch.timeWindow_.data(), static_cast<std::size_t> (n) },
+                           std::span<std::int16_t> { ch.windowed_.data(), static_cast<std::size_t> (n) },
+                           std::span<const std::int32_t> { win.data(), static_cast<std::size_t> (n) });
+
+    for (int i = 0; i < n; ++i)
+        ch.floatFftIn_[static_cast<std::size_t> (i)] =
+            static_cast<float> (ch.windowed_[static_cast<std::size_t> (i)]) * (1.0f / 32768.0f);
+
+    const float hpCut = state_.highPassCutoffHz.load (std::memory_order_relaxed);
+    if (hpCut >= EngineState::kHighPassOffHz && ch.sampleRate_ > 0.0)
+    {
+        if (hpCut != lastHpCut || ch.sampleRate_ != lastHpSr)
+        {
+            lastHpCut = hpCut;
+            lastHpSr = ch.sampleRate_;
+            hpFilter.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass (
+                static_cast<float> (ch.sampleRate_), hpCut, 0.707f);
+        }
+        float* line = ch.floatFftIn_.data();
+        juce::dsp::AudioBlock<float> block (&line, 1, static_cast<size_t> (n));
+        juce::dsp::ProcessContextReplacing<float> ctx (block);
+        hpFilter.process (ctx);
+    }
+
+    ch.fft_->computePowerSpectrum (std::span<const float> { ch.floatFftIn_.data(), ch.floatFftIn_.size() },
+                                   std::span<float> { ch.magSpectrum_.data(), ch.magSpectrum_.size() });
+}
+
+PitchLabEngine::AnalysisChain::AnalysisChain()
+    : ingress_ (kIngressCapacity)
+{
+}
+
+void PitchLabEngine::AnalysisChain::prepare (int fftSize, double sampleRate, int maxBlockSamples)
+{
+    juce::ignoreUnused (maxBlockSamples);
+    fftSize_ = fftSize;
+    sampleRate_ = sampleRate;
+
+    const int ord = fftOrderForSize (fftSize);
+    if (fftSize <= 0 || ord <= 0)
+    {
+        tables_.reset();
+        fft_.reset();
+        timeWindow_.clear();
+        windowed_.clear();
+        floatFftIn_.clear();
+        magSpectrum_.clear();
+        return;
+    }
+
+    tables_ = std::make_unique<StaticTables> (fftSize);
+    fft_ = std::make_unique<FftMagnitudes> (ord);
+
+    const int n = fftSize;
+    timeWindow_.assign (static_cast<std::size_t> (n), static_cast<std::int16_t> (0));
+    windowed_.assign (static_cast<std::size_t> (n), static_cast<std::int16_t> (0));
+    floatFftIn_.assign (static_cast<std::size_t> (n), 0.0f);
+    magSpectrum_.assign (static_cast<std::size_t> (n / 2 + 1), 0.0f);
+}
 
 const char* engineVersionString() noexcept
 {
     return "0.3.0-phase2";
 }
 
-PitchLabEngine::PitchLabEngine()
-    : ingress_ (kIngressCapacity)
-{
-}
+PitchLabEngine::PitchLabEngine() = default;
 
 PitchLabEngine::~PitchLabEngine() = default;
+
+int PitchLabEngine::lfFftSizeForPrepare (int hfFftSize) const noexcept
+{
+    if (hfFftSize <= 0)
+        return 0;
+
+    const auto tw = static_cast<long long> (hfFftSize) * 2LL;
+    if (tw > 1048576LL)
+        return hfFftSize;
+
+    if (fftOrderForSize (static_cast<int> (tw)) > 0)
+        return static_cast<int> (tw);
+
+    return hfFftSize;
+}
 
 void PitchLabEngine::prepareToPlay (double sampleRate, int maxBlockSamples)
 {
@@ -56,33 +152,52 @@ void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
 {
     state_.sampleRate = sampleRate;
     state_.audioBufferSize = std::max (1, maxBlockSamples);
-    conversionScratch_.resize (static_cast<std::size_t> (std::max (1, maxBlockSamples)));
-    tables_ = std::make_unique<StaticTables> (state_.fftSize);
+    const int scratchSamples = std::max ({ 1, maxBlockSamples, state_.fftSize });
+    conversionScratch_.resize (static_cast<std::size_t> (scratchSamples));
 
-    const int ord = fftOrderForSize (state_.fftSize);
-    if (ord > 0)
-        fft_ = std::make_unique<FftMagnitudes> (ord);
+    const int hfN = state_.fftSize;
+    const int lfN = lfFftSizeForPrepare (hfN);
+
+    hfChain_.prepare (hfN, sampleRate, maxBlockSamples);
+    lfChain_.prepare (lfN, sampleRate / 4.0, std::max (1, maxBlockSamples / 4 + 1));
+
+    decimator_.prepare (sampleRate);
+
+    const std::size_t maxB = static_cast<std::size_t> (scratchSamples);
+    decimatorFloatScratch_.resize (maxB);
+    const std::size_t decOutCap = maxB / 4 + 2;
+    decimatorFloatOutScratch_.resize (std::max (std::size_t { 1 }, decOutCap));
+    decimatorInt16Scratch_.resize (std::max (std::size_t { 1 }, decOutCap));
+
+    if (hfN > 0 && fftOrderForSize (hfN) > 0)
+        magForFold_.assign (static_cast<std::size_t> (hfN / 2 + 1), 0.0f);
     else
-        fft_.reset();
+        magForFold_.clear();
 
-    const int n = state_.fftSize;
-    timeWindow_.assign (static_cast<std::size_t> (n), static_cast<std::int16_t> (0));
-    windowed_.assign (static_cast<std::size_t> (n), static_cast<std::int16_t> (0));
-    floatFftIn_.assign (static_cast<std::size_t> (n), 0.0f);
-    magSpectrum_.assign (static_cast<std::size_t> (n / 2 + 1), 0.0f);
-    magForFold_.assign (static_cast<std::size_t> (n / 2 + 1), 0.0f);
     chromaRow_.fill (0.0f);
-    chromaMap_.rebuild (sampleRate, n);
+    chromaMap_.rebuild (sampleRate, hfN);
 
     juce::dsp::ProcessSpec hpSpec;
     hpSpec.sampleRate = sampleRate;
-    hpSpec.maximumBlockSize = (juce::uint32) std::max (maxBlockSamples, n);
+    hpSpec.maximumBlockSize = (juce::uint32) std::max (maxBlockSamples, hfN);
     hpSpec.numChannels = 1;
     highPassFilter_.prepare (hpSpec);
     highPassFilter_.reset();
+
+    juce::dsp::ProcessSpec lfHpSpec;
+    lfHpSpec.sampleRate = sampleRate / 4.0;
+    lfHpSpec.maximumBlockSize =
+        (juce::uint32) std::max (std::max (1, maxBlockSamples / 4 + 1), lfN);
+    lfHpSpec.numChannels = 1;
+    lfHighPassFilter_.prepare (lfHpSpec);
+    lfHighPassFilter_.reset();
+
     lastHighPassCutHz_ = -1.0f;
     lastHighPassSr_ = 0.0;
+    lastLfHighPassCutHz_ = -1.0f;
+    lastLfHighPassSr_ = 0.0;
     analysisDecimationCounter_ = 0;
+    lfAnalysisDecimationCounter_ = 0;
     {
         const std::scoped_lock lk (frameMutex_);
         latestFrame_ = RenderFrameData {};
@@ -102,12 +217,21 @@ void PitchLabEngine::reconfigureFftSize (int newFftSize, double sampleRate, int 
 
 void PitchLabEngine::reset()
 {
-    ingress_.reset();
+    hfChain_.ingress_.reset();
+    lfChain_.ingress_.reset();
+    decimator_.reset();
     state_.resetAnalysisDisplay();
     state_.viewScrollX = 0.0f;
     state_.strobePhase = 0.0f;
     chromaRow_.fill (0.0f);
     analysisDecimationCounter_ = 0;
+    lfAnalysisDecimationCounter_ = 0;
+    highPassFilter_.reset();
+    lfHighPassFilter_.reset();
+    lastHighPassCutHz_ = -1.0f;
+    lastHighPassSr_ = 0.0;
+    lastLfHighPassCutHz_ = -1.0f;
+    lastLfHighPassSr_ = 0.0;
     {
         const std::scoped_lock lk (frameMutex_);
         latestFrame_ = RenderFrameData {};
@@ -117,53 +241,49 @@ void PitchLabEngine::reset()
 
 void PitchLabEngine::runAnalysisChain() noexcept
 {
-    if (fft_ == nullptr || tables_ == nullptr)
+    if (hfChain_.fft_ == nullptr || hfChain_.tables_ == nullptr)
         return;
 
-    const int n = state_.fftSize;
-    const std::vector<std::int32_t>& win = (state_.windowKind() == WindowKind::Gaussian)
-                                               ? tables_->gaussianWindowQ24()
-                                               : tables_->hanningWindowQ24();
-    if ((int) win.size() < n)
-        return;
+    const int hfN = hfChain_.fftSize_;
+    const SpectralBackendMode backend = state_.spectralBackendMode();
 
-    ingress_.copyLatestInto (std::span<std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) });
-
-    applyAgcInt16InPlace (std::span<std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) },
-                          state_.agcEnabled.load (std::memory_order_relaxed),
-                          state_.agcStrength.load (std::memory_order_relaxed));
-
-    applyHanningWindowQ24 (std::span<const std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) },
-                           std::span<std::int16_t> { windowed_.data(), static_cast<std::size_t> (n) },
-                           std::span<const std::int32_t> { win.data(), static_cast<std::size_t> (n) });
-
-    for (int i = 0; i < n; ++i)
-        floatFftIn_[static_cast<std::size_t> (i)] = static_cast<float> (windowed_[static_cast<std::size_t> (i)]) * (1.0f / 32768.0f);
-
-    const float hpCut = state_.highPassCutoffHz.load (std::memory_order_relaxed);
-    if (hpCut >= EngineState::kHighPassOffHz && state_.sampleRate > 0.0)
+    if (backend == SpectralBackendMode::MultiResSTFT_v1_0)
     {
-        if (hpCut != lastHighPassCutHz_ || state_.sampleRate != lastHighPassSr_)
-        {
-            lastHighPassCutHz_ = hpCut;
-            lastHighPassSr_ = state_.sampleRate;
-            highPassFilter_.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass (
-                static_cast<float> (state_.sampleRate), hpCut, 0.707f);
-        }
-        float* line = floatFftIn_.data();
-        juce::dsp::AudioBlock<float> block (&line, 1, static_cast<size_t> (n));
-        juce::dsp::ProcessContextReplacing<float> ctx (block);
-        highPassFilter_.process (ctx);
+        if (lfChain_.fft_ == nullptr || lfChain_.tables_ == nullptr)
+            return;
+
+        const int every = std::max (1, state_.analysisEveryNCallbacks.load (std::memory_order_relaxed));
+        const int lfEvery = std::max (1, every * 2);
+        const bool runLf = lfAnalysisDecimationCounter_ >= lfEvery;
+        if (runLf)
+            lfAnalysisDecimationCounter_ = 0;
+
+        runFftOnChain (hfChain_, highPassFilter_, lastHighPassCutHz_, lastHighPassSr_);
+        if (runLf)
+            runFftOnChain (lfChain_, lfHighPassFilter_, lastLfHighPassCutHz_, lastLfHighPassSr_);
+
+        constexpr float crossoverHz = 1000.0f;
+        const float lfGain = static_cast<float> (hfN) / static_cast<float> (lfChain_.fftSize_);
+        stitchMultiResMagnitudes (std::span<const float> { hfChain_.magSpectrum_.data(), hfChain_.magSpectrum_.size() },
+                                  std::span<const float> { lfChain_.magSpectrum_.data(), lfChain_.magSpectrum_.size() },
+                                  state_.sampleRate,
+                                  state_.sampleRate / 4.0,
+                                  hfN,
+                                  lfChain_.fftSize_,
+                                  crossoverHz,
+                                  lfGain,
+                                  std::span<float> { magForFold_.data(), magForFold_.size() });
     }
+    else
+    {
+        runFftOnChain (hfChain_, highPassFilter_, lastHighPassCutHz_, lastHighPassSr_);
 
-    fft_->computePowerSpectrum (std::span<const float> { floatFftIn_.data(), floatFftIn_.size() },
-                                std::span<float> { magSpectrum_.data(), magSpectrum_.size() });
-
-    buildMagForFold (std::span<const float> { magSpectrum_.data(), magSpectrum_.size() },
-                     std::span<float> { magForFold_.data(), magForFold_.size() },
-                     state_.sampleRate,
-                     n,
-                     state_.spectralBackendMode());
+        buildMagForFold (std::span<const float> { hfChain_.magSpectrum_.data(), hfChain_.magSpectrum_.size() },
+                         std::span<float> { magForFold_.data(), magForFold_.size() },
+                         state_.sampleRate,
+                         hfN,
+                         backend);
+    }
 
     FoldToChromaSettings foldSettings;
     foldSettings.interpMode = state_.foldInterpMode();
@@ -173,7 +293,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
     foldSettings.maxHarmonicK = state_.maxHarmonicK.load (std::memory_order_relaxed);
     foldToChroma384 (chromaMap_,
                      state_.sampleRate,
-                     n,
+                     hfN,
                      std::span<const float> { magForFold_.data(), magForFold_.size() },
                      std::span<float> { chromaRow_.data(), chromaRow_.size() },
                      std::span<std::uint8_t> { state_.octaveHarmonicIndex.data(), state_.octaveHarmonicIndex.size() },
@@ -182,8 +302,8 @@ void PitchLabEngine::runAnalysisChain() noexcept
     applyChromaShaping384 (state_.chromaShapingMode(),
                            std::span<float> { chromaRow_.data(), chromaRow_.size() });
 
-    const float peakBin = refinedPeakBin (std::span<const float> { magSpectrum_.data(), magSpectrum_.size() });
-    state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, n);
+    const float peakBin = refinedPeakBin (std::span<const float> { magForFold_.data(), magForFold_.size() });
+    state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, hfN);
     state_.tuningError = centsVsTempered (state_.currentHz);
 
     fillChordProbabilitiesFromChroma384 (std::span<const float> { chromaRow_.data(), chromaRow_.size() },
@@ -195,7 +315,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
     state_.strobePhase = std::fmod (state_.strobePhase + twoPi * state_.currentHz * hop / static_cast<float> (state_.sampleRate), twoPi);
 
     RenderFrameData snap;
-    ingress_.copyLatestInto (std::span<std::int16_t> { snap.waveform.data(), snap.waveform.size() });
+    hfChain_.ingress_.copyLatestInto (std::span<std::int16_t> { snap.waveform.data(), snap.waveform.size() });
     std::copy (chromaRow_.begin(), chromaRow_.end(), snap.chromaRow.begin());
     std::copy (state_.chordProbabilities.begin(), state_.chordProbabilities.end(), snap.chordProbabilities.begin());
     snap.currentHz = state_.currentHz;
@@ -215,8 +335,32 @@ void PitchLabEngine::processAudioInterleaved (const float* const* channelData, i
 
     const std::span<std::int16_t> dst { conversionScratch_.data(), static_cast<std::size_t> (numSamples) };
     convertDeinterleavedToInt16Mono (channelData, numChannels, numSamples, dst);
-    ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (numSamples) });
+    hfChain_.ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (numSamples) });
+
+    if (state_.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0
+        && static_cast<std::size_t> (numSamples) <= decimatorFloatScratch_.size ()
+        && ! decimatorFloatOutScratch_.empty () && ! decimatorInt16Scratch_.empty ())
+    {
+        for (int i = 0; i < numSamples; ++i)
+            decimatorFloatScratch_[static_cast<std::size_t> (i)] =
+                static_cast<float> (conversionScratch_[static_cast<std::size_t> (i)]) * (1.0f / 32768.0f);
+
+        const int nd = decimator_.processBlock (
+            std::span<const float> { decimatorFloatScratch_.data(), static_cast<std::size_t> (numSamples) },
+            std::span<float> { decimatorFloatOutScratch_.data(), decimatorFloatOutScratch_.size() });
+
+        if (nd > 0)
+        {
+            convertFloatToInt16Ingress (std::span<const float> { decimatorFloatOutScratch_.data(), static_cast<std::size_t> (nd) },
+                                        std::span<std::int16_t> { decimatorInt16Scratch_.data(), static_cast<std::size_t> (nd) });
+            lfChain_.ingress_.push (std::span<const std::int16_t> { decimatorInt16Scratch_.data(), static_cast<std::size_t> (nd) });
+        }
+    }
+
     state_.analysisDirty.store (true, std::memory_order_release);
+
+    if (state_.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0)
+        ++lfAnalysisDecimationCounter_;
 
     const int every = std::max (1, state_.analysisEveryNCallbacks.load (std::memory_order_relaxed));
     ++analysisDecimationCounter_;
@@ -229,7 +373,7 @@ void PitchLabEngine::processAudioInterleaved (const float* const* channelData, i
 
 void PitchLabEngine::copyIngressLatest (std::span<std::int16_t> dst) const noexcept
 {
-    ingress_.copyLatestInto (dst);
+    hfChain_.ingress_.copyLatestInto (dst);
 }
 
 void PitchLabEngine::copyChromaRow384 (std::span<float> dst) const noexcept
@@ -248,21 +392,50 @@ void PitchLabEngine::copyLatestRenderFrame (RenderFrameData& dst) const noexcept
 void PitchLabEngine::analyzeOfflineWindowFromMonoFloat (std::span<const float> monoFftWindow, RenderFrameData& out)
 {
     std::unique_lock lk (configMutex_);
+
+    /** Instant waterfall passes one HF-sized column; LF multi-res needs longer decimated history than
+        that window provides. Temporarily use single-path STFT on this offline engine only. */
+    struct ScopedOfflineStftIfMultiRes final
+    {
+        EngineState& st;
+        bool restore = false;
+        explicit ScopedOfflineStftIfMultiRes (EngineState& s) : st (s)
+        {
+            if (s.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0)
+            {
+                s.setSpectralBackendMode (SpectralBackendMode::STFT_v1_0);
+                restore = true;
+            }
+        }
+        ~ScopedOfflineStftIfMultiRes()
+        {
+            if (restore)
+                st.setSpectralBackendMode (SpectralBackendMode::MultiResSTFT_v1_0);
+        }
+        ScopedOfflineStftIfMultiRes (const ScopedOfflineStftIfMultiRes&) = delete;
+        ScopedOfflineStftIfMultiRes& operator= (const ScopedOfflineStftIfMultiRes&) = delete;
+    } scopeOfflineStft (state_);
+
     const int n = state_.fftSize;
-    if (static_cast<int> (monoFftWindow.size()) != n || fft_ == nullptr || tables_ == nullptr
+    if (static_cast<int> (monoFftWindow.size()) != n || hfChain_.fft_ == nullptr || hfChain_.tables_ == nullptr
         || static_cast<int> (conversionScratch_.size()) < n)
         return;
 
-    ingress_.reset();
+    hfChain_.ingress_.reset();
+    lfChain_.ingress_.reset();
     analysisDecimationCounter_ = 0;
+    lfAnalysisDecimationCounter_ = 0;
     state_.strobePhase = 0.0f;
     highPassFilter_.reset();
+    lfHighPassFilter_.reset();
     lastHighPassCutHz_ = -1.0f;
     lastHighPassSr_ = 0.0;
+    lastLfHighPassCutHz_ = -1.0f;
+    lastLfHighPassSr_ = 0.0;
 
     convertFloatToInt16Ingress (monoFftWindow,
                                 std::span<std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
-    ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+    hfChain_.ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
     runAnalysisChain();
     copyLatestRenderFrame (out);
 }
