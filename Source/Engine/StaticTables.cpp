@@ -109,6 +109,35 @@ std::uint8_t StaticTables::dbBrightness (std::size_t amplitudeIndex) const noexc
     return lut[amplitudeIndex];
 }
 
+void StaticTables::fillDisplayChromaFromLinear384 (std::span<const float> linear384,
+                                                   std::span<float> outDisplay384) const noexcept
+{
+    if (linear384.size() < 384 || outDisplay384.size() < 384)
+        return;
+
+    float mx = 0.0f;
+    for (int i = 0; i < 384; ++i)
+        mx = std::max (mx, linear384[static_cast<std::size_t> (i)]);
+
+    constexpr float kEps = 1.0e-12f;
+    const float gain = (mx > kEps) ? (32767.0f / mx) : 0.0f;
+
+    for (int i = 0; i < 384; ++i)
+    {
+        if (gain <= 0.0f)
+        {
+            outDisplay384[static_cast<std::size_t> (i)] = 0.0f;
+            continue;
+        }
+
+        const float v = linear384[static_cast<std::size_t> (i)] * gain;
+        const int idx = static_cast<int> (std::lround (v));
+        const int clamped = std::clamp (idx, 0, 32767);
+        outDisplay384[static_cast<std::size_t> (i)] =
+            static_cast<float> (dbBrightness (static_cast<std::size_t> (clamped))) * (1.0f / 255.0f);
+    }
+}
+
 std::uint8_t StaticTables::strobe (std::size_t i) const noexcept
 {
     if (i >= strobeGradient_.size())

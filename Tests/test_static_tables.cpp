@@ -2,6 +2,7 @@
 
 #include "StaticTables.h"
 
+#include <array>
 #include <cmath>
 
 TEST(StaticTables, DbBrightnessSizeAndEndpoints)
@@ -27,6 +28,23 @@ TEST(StaticTables, DbBrightnessLutSharedAcrossFftSizes)
     pitchlab::StaticTables a (512);
     pitchlab::StaticTables b (8192);
     EXPECT_EQ(a.dbBrightness (5000), b.dbBrightness (5000));
+}
+
+TEST(StaticTables, LinearChromaMapsMonotonicThroughDisplayLut)
+{
+    pitchlab::StaticTables t (4096);
+    std::array<float, 384> in {};
+    std::array<float, 384> out {};
+    in[5] = 1.0f;
+    in[10] = 4.0f;
+    t.fillDisplayChromaFromLinear384 (std::span<const float> { in.data(), in.size() },
+                                      std::span<float> { out.data(), out.size() });
+    for (float v : out)
+    {
+        EXPECT_GE(v, 0.0f);
+        EXPECT_LE(v, 1.0f);
+    }
+    EXPECT_GT(out[10], out[5]);
 }
 
 TEST(StaticTables, StrobeLength4096)

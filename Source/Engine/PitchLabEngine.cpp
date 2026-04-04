@@ -330,7 +330,8 @@ void PitchLabEngine::runAnalysisChain() noexcept
 
     RenderFrameData snap;
     hfChain_.ingress_.copyLatestInto (std::span<std::int16_t> { snap.waveform.data(), snap.waveform.size() });
-    std::copy (chromaRow_.begin(), chromaRow_.end(), snap.chromaRow.begin());
+    hfChain_.tables_->fillDisplayChromaFromLinear384 (std::span<const float> { chromaRow_.data(), chromaRow_.size() },
+                                                      std::span<float> { snap.chromaRow.data(), snap.chromaRow.size() });
     std::copy (state_.chordProbabilities.begin(), state_.chordProbabilities.end(), snap.chordProbabilities.begin());
     snap.currentHz = state_.currentHz;
     snap.tuningError = state_.tuningError;

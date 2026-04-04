@@ -27,5 +27,10 @@ TEST(RenderFrameSnapshot, SnapshotCarriesPitchAndChroma)
     EXPECT_NEAR(frame.currentHz, 440.0f, 8.0f);
     EXPECT_LT(std::abs (frame.tuningError), 20.0f);
     EXPECT_NE(frame.chromaRow[0], 0.0f);
+    for (float c : frame.chromaRow)
+    {
+        EXPECT_GE(c, 0.0f);
+        EXPECT_LE(c, 1.0f);
+    }
 }
 
