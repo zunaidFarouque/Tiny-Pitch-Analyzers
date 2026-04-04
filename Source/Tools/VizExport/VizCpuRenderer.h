@@ -1,10 +1,12 @@
 #pragma once
 
 #include "PitchLabEngine.h"
+#include "PitchPeak.h"
 
 #include <juce_graphics/juce_graphics.h>
 
 #include <array>
+#include <vector>
 
 namespace pitchlab
 {
@@ -15,7 +17,8 @@ enum class VizMode
     Waterfall,
     Needle,
     StrobeRadial,
-    ChordMatrix
+    ChordMatrix,
+    SyntheticPeaks
 };
 
 struct VizFrameData
@@ -28,6 +31,7 @@ struct VizFrameData
     int waterfallWriteY = 1; // mirrors one uploaded row in the film reel
     /** If non-null, 384×384 row-major (row=time, col=chroma); overrides repeated chromaRow for waterfall. */
     const float* waterfallGrid384 = nullptr;
+    std::vector<PitchPeak> activePeaks;
 };
 
 struct WaterfallRenderParams
@@ -54,6 +58,7 @@ private:
     juce::Image renderNeedle (const VizFrameData& frame) const;
     juce::Image renderStrobe (const VizFrameData& frame, const StaticTables* tables) const;
     juce::Image renderChordMatrix (const VizFrameData& frame) const;
+    juce::Image renderSyntheticPeaks (const VizFrameData& frame) const;
 
     int width_ = 1024;
     int height_ = 384;

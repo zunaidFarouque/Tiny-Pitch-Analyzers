@@ -60,6 +60,7 @@ pitchlab::VizMode CpuVisualizerHost::toVizMode (VisualizationMode m) const noexc
         case VisualizationMode::Needle: return pitchlab::VizMode::Needle;
         case VisualizationMode::StrobeRadial: return pitchlab::VizMode::StrobeRadial;
         case VisualizationMode::ChordMatrix: return pitchlab::VizMode::ChordMatrix;
+        case VisualizationMode::SyntheticPeaks: return pitchlab::VizMode::SyntheticPeaks;
         default: return pitchlab::VizMode::Waveform;
     }
 }
@@ -80,6 +81,7 @@ void CpuVisualizerHost::paint (juce::Graphics& g)
     vf.strobePhase = frame.strobePhase;
     vf.waterfallWriteY = waterfallRing_.writeY();
     vf.waterfallGrid384 = hasWaterfallGrid_ ? waterfallGridStorage_.data() : nullptr;
+    vf.activePeaks = frame.activePeaks;
 
     pitchlab::VizCpuRenderer renderer (juce::jmax (1, getWidth()), juce::jmax (1, getHeight()));
     renderer.setWaterfallRenderParams (waterfallParams_);

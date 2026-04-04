@@ -2,6 +2,7 @@
 
 #include "LegacyGLBatcher.h"
 #include "StaticTables.h"
+#include "WaterfallFreqAxis.h"
 
 #include <array>
 #include <algorithm>
@@ -481,6 +482,9 @@ void OpenGLVisualizerHost::renderOpenGL()
             break;
         case VisualizationMode::ChordMatrix:
             renderChordMatrix();
+            break;
+        case VisualizationMode::SyntheticPeaks:
+            renderSyntheticPeaks();
             break;
         default:
             renderWaveform();
@@ -1154,4 +1158,64 @@ void OpenGLVisualizerHost::renderChordMatrix()
     gl.glDisableVertexAttribArray ((GLuint) texColorAttrib_->attributeID);
     gl.glBindBuffer (juce::gl::GL_ARRAY_BUFFER, 0);
     juce::gl::glBindTexture (juce::gl::GL_TEXTURE_2D, 0);
+}
+
+void OpenGLVisualizerHost::renderSyntheticPeaks()
+{
+    if (lineShader_ == nullptr || linePosAttrib_ == nullptr || lineColorUniform_ == nullptr || lineVbo_ == 0)
+        return;
+
+    pitchlab::RenderFrameData frame;
+    {
+        const juce::ScopedLock sl (frameLock_);
+        frame = latestFrame_;
+    }
+
+    if (frame.activePeaks.empty())
+        return;
+
+    const float kVisMinHz = pitchlab::WaterfallFreqAxis::kVisMinHz;
+    const float kVisMaxHz = pitchlab::WaterfallFreqAxis::kVisMaxHz;
+    const float logMin = std::log2 (kVisMinHz);
+    const float logDen = std::log2 (kVisMaxHz) - logMin;
+
+    float maxMag = 0.0f;
+    for (const auto& p : frame.activePeaks)
+        maxMag = std::max (maxMag, p.magnitude);
+    if (maxMag < 1.0e-12f)
+        maxMag = 1.0f;
+
+    using namespace juce::gl;
+    juce::gl::glEnable (GL_BLEND);
+    juce::gl::glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    lineShader_->use();
+    auto& gl = openGLContext_.extensions;
+    gl.glBindBuffer (juce::gl::GL_ARRAY_BUFFER, lineVbo_);
+    gl.glEnableVertexAttribArray ((GLuint) linePosAttrib_->attributeID);
+    gl.glVertexAttribPointer ((GLuint) linePosAttrib_->attributeID,
+                              2,
+                              juce::gl::GL_FLOAT,
+                              juce::gl::GL_FALSE,
+                              0,
+                              nullptr);
+
+    for (const auto& p : frame.activePeaks)
+    {
+        const float hz = juce::jlimit (kVisMinHz, kVisMaxHz, p.frequencyHz);
+        const float t = (std::log2 (hz) - logMin) / logDen;
+        const float x = -1.0f + 2.0f * t;
+        const float verts[] = { x, -1.0f, x, 1.0f };
+        gl.glBufferData (juce::gl::GL_ARRAY_BUFFER,
+                         sizeof (verts),
+                         verts,
+                         juce::gl::GL_STREAM_DRAW);
+        const float norm = juce::jlimit (0.15f, 1.0f, p.magnitude / maxMag);
+        lineColorUniform_->set (0.35f * norm, 0.88f * norm, 1.0f * norm, norm);
+        juce::gl::glDrawArrays (juce::gl::GL_LINES, 0, 2);
+    }
+
+    gl.glDisableVertexAttribArray ((GLuint) linePosAttrib_->attributeID);
+    gl.glBindBuffer (juce::gl::GL_ARRAY_BUFFER, 0);
+    juce::gl::glDisable (GL_BLEND);
 }

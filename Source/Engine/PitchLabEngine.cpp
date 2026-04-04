@@ -8,6 +8,7 @@
 #include "FloatIngress.h"
 #include "MultiResSpectrumStitch.h"
 #include "PitchFromSpectrum.h"
+#include "PolyphonicPeakPicker.h"
 #include "PitchLabChord.h"
 #include "SpectralMagSmear.h"
 #include "StaticTables.h"
@@ -182,6 +183,11 @@ void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
     else
         magForFold_.clear();
 
+    currentPeaks_.clear();
+    currentPeaks_.reserve (static_cast<std::size_t> (PitchPeak::kMaxPeaksCap));
+    peakPickerScratch_.clear();
+    peakPickerScratch_.reserve (magForFold_.size());
+
     chromaRow_.fill (0.0f);
     chromaMap_.rebuild (sampleRate, virtualN);
 
@@ -295,6 +301,21 @@ void PitchLabEngine::runAnalysisChain() noexcept
                          backend);
     }
 
+    if (magForFold_.size() >= 3)
+    {
+        const int maxPeaks = (std::min) (state_.maxPolyphony.load (std::memory_order_relaxed), PitchPeak::kMaxPeaksCap);
+        extractPeaks (std::span<const float> { magForFold_.data(), magForFold_.size() },
+                      state_.sampleRate,
+                      virtualN,
+                      state_.peakThreshold.load (std::memory_order_relaxed),
+                      state_.peakProminence.load (std::memory_order_relaxed),
+                      maxPeaks,
+                      peakPickerScratch_,
+                      currentPeaks_);
+    }
+    else
+        currentPeaks_.clear();
+
     FoldToChromaSettings foldSettings;
     foldSettings.interpMode = state_.foldInterpMode();
     foldSettings.harmonicWeightMode = state_.foldHarmonicWeightMode();
@@ -332,6 +353,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
     snap.tuningError = state_.tuningError;
     snap.strobePhase = state_.strobePhase;
     snap.sequence = ++frameSequence_;
+    snap.activePeaks = currentPeaks_;
 
     const std::scoped_lock lk (frameMutex_);
     latestFrame_ = snap;

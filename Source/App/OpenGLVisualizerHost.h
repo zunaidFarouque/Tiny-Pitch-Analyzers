@@ -69,6 +69,7 @@ private:
     void renderNeedle();
     void renderStrobeComposite();
     void renderChordMatrix();
+    void renderSyntheticPeaks();
     void createFilmTextureIfNeeded();
     void ensureWhiteTexture();
     void ensureStrobeTexture();

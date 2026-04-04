@@ -1,6 +1,7 @@
 #include "VizCpuRenderer.h"
 
 #include "StaticTables.h"
+#include "WaterfallFreqAxis.h"
 #include "WaterfallMapping.h"
 
 #include <algorithm>
@@ -36,6 +37,7 @@ constexpr float kPi = 3.14159265359f;
         case VizMode::Needle: return "needle";
         case VizMode::StrobeRadial: return "stroberadial";
         case VizMode::ChordMatrix: return "chordmatrix";
+        case VizMode::SyntheticPeaks: return "syntheticpeaks";
         default: return {};
     }
 }
@@ -61,6 +63,7 @@ juce::Image VizCpuRenderer::render (VizMode mode, const VizFrameData& frame, con
         case VizMode::Needle: return renderNeedle (frame);
         case VizMode::StrobeRadial: return renderStrobe (frame, tables);
         case VizMode::ChordMatrix: return renderChordMatrix (frame);
+        case VizMode::SyntheticPeaks: return renderSyntheticPeaks (frame);
         default: return renderWaveform (frame);
     }
 }
@@ -280,6 +283,42 @@ juce::Image VizCpuRenderer::renderChordMatrix (const VizFrameData& frame) const
     return img;
 }
 
+juce::Image VizCpuRenderer::renderSyntheticPeaks (const VizFrameData& frame) const
+{
+    juce::Image img (juce::Image::ARGB, width_, height_, true);
+    juce::Graphics g (img);
+    g.fillAll (juce::Colours::black);
+
+    if (frame.activePeaks.empty())
+        return img;
+
+    const float kVisMinHz = WaterfallFreqAxis::kVisMinHz;
+    const float kVisMaxHz = WaterfallFreqAxis::kVisMaxHz;
+    const float logMin = std::log2 (kVisMinHz);
+    const float logDen = std::log2 (kVisMaxHz) - logMin;
+
+    float maxMag = 0.0f;
+    for (const auto& p : frame.activePeaks)
+        maxMag = std::max (maxMag, p.magnitude);
+    if (maxMag < 1.0e-12f)
+        maxMag = 1.0f;
+
+    const float h = static_cast<float> (height_);
+    const float w = static_cast<float> (width_);
+
+    for (const auto& p : frame.activePeaks)
+    {
+        const float hz = juce::jlimit (kVisMinHz, kVisMaxHz, p.frequencyHz);
+        const float t = (std::log2 (hz) - logMin) / logDen;
+        const float x = t * (w - 1.0f);
+        const float norm = juce::jlimit (0.15f, 1.0f, p.magnitude / maxMag);
+        g.setColour (juce::Colour::fromFloatRGBA (0.35f * norm, 0.88f * norm, 1.0f * norm, norm));
+        g.drawLine (x, 0.0f, x, h, 2.0f);
+    }
+
+    return img;
+}
+
 const char* modeToName (VizMode mode) noexcept
 {
     switch (mode)
@@ -289,6 +328,7 @@ const char* modeToName (VizMode mode) noexcept
         case VizMode::Needle: return "needle";
         case VizMode::StrobeRadial: return "stroberadial";
         case VizMode::ChordMatrix: return "chordmatrix";
+        case VizMode::SyntheticPeaks: return "syntheticpeaks";
         default: return "unknown";
     }
 }
@@ -306,7 +346,12 @@ bool parseModeList (const juce::String& csv, juce::Array<VizMode>& outModes)
         const auto t = raw.toLowerCase();
         if (t == "all")
         {
-            outModes.addArray ({ VizMode::Waveform, VizMode::Waterfall, VizMode::Needle, VizMode::StrobeRadial, VizMode::ChordMatrix });
+            outModes.addArray ({ VizMode::Waveform,
+                                 VizMode::Waterfall,
+                                 VizMode::Needle,
+                                 VizMode::StrobeRadial,
+                                 VizMode::ChordMatrix,
+                                 VizMode::SyntheticPeaks });
             return true;
         }
         if (t == "waveform") outModes.add (VizMode::Waveform);
@@ -314,6 +359,7 @@ bool parseModeList (const juce::String& csv, juce::Array<VizMode>& outModes)
         else if (t == "needle") outModes.add (VizMode::Needle);
         else if (t == "stroberadial" || t == "strobe") outModes.add (VizMode::StrobeRadial);
         else if (t == "chordmatrix" || t == "chord") outModes.add (VizMode::ChordMatrix);
+        else if (t == "syntheticpeaks" || t == "synthetic") outModes.add (VizMode::SyntheticPeaks);
         else return false;
     }
 

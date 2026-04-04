@@ -33,10 +33,13 @@ add_library(PitchLabEngine STATIC
     Source/Engine/MultiResSpectrumStitch.cpp
     Source/Engine/PitchLabChord.cpp
     Source/Engine/PitchFromSpectrum.cpp
+    Source/Engine/PolyphonicPeakPicker.cpp
     Source/Engine/PitchLabEngine.cpp
+    Source/Engine/RenderFrameData.cpp
     Source/Engine/SpectralMagSmear.cpp
     Source/Engine/StaticTables.cpp
     Source/Engine/WindowApplyQ24.cpp
+    Source/Engine/WaterfallPeakRow.cpp
 )
 
 target_include_directories(PitchLabEngine PUBLIC

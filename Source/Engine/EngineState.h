@@ -123,6 +123,16 @@ struct EngineState
     /** Max harmonic index K for integer-harmonic fold (k = 1 .. K). */
     std::atomic<int> maxHarmonicK { 48 };
 
+    /** Polyphonic peak picker: minimum height as a fraction of the frame's spectral max (0..1). */
+    std::atomic<float> peakThreshold { 0.05f };
+    /** Minimum prominence vs valleys, as a fraction of the frame's spectral max (0..1). */
+    std::atomic<float> peakProminence { 0.1f };
+    /** Max peaks per frame (clamped to PitchPeak::kMaxPeaksCap in engine). */
+    std::atomic<int> maxPolyphony { 32 };
+
+    /** Waterfall mode: feed film from peak stamps vs folded chroma (UI thread sets, audio reads relaxed). */
+    std::atomic<bool> waterfallPeakViewEnabled { false };
+
     [[nodiscard]] WindowKind windowKind() const noexcept
     {
         return static_cast<WindowKind> (windowKindRaw.load (std::memory_order_relaxed));

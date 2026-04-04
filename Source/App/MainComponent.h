@@ -5,6 +5,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <array>
 #include <atomic>
 #include <vector>
 
@@ -129,8 +130,14 @@ private:
     juce::ComboBox analysisRateCombo_;
     juce::Slider highPassSlider_;
     juce::Label highPassLabel_;
+    juce::Slider peakThresholdSlider_;
+    juce::Slider peakProminenceSlider_;
+    juce::Label peakThresholdLabel_;
+    juce::Label peakProminenceLabel_;
+    juce::ComboBox maxPolyphonyCombo_;
     juce::Label statusLabel_;
     juce::Label engineLabel_;
+    juce::ToggleButton waterfallPeakViewToggle_ { "Peak spectrum" };
     juce::ComboBox vizModeCombo_;
     juce::ComboBox windowKindCombo_;
     juce::ComboBox backendCombo_;
@@ -143,6 +150,8 @@ private:
     CpuVisualizerHost cpuHost_;
     IRendererHost* activeRenderer_ = nullptr;
     RenderBackendPolicy renderBackendPolicy_ = RenderBackendPolicy::Auto;
+
+    std::array<float, 384> waterfallPeakRowScratch_ {};
 
     std::vector<const float*> channelPtrScratch_;
     std::vector<juce::File> exampleAudioFiles_;

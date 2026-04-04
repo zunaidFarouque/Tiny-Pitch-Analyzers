@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 
 #include "SharedWaterfallRing.h"
+#include "WaterfallFreqAxis.h"
+#include "WaterfallPeakRow.h"
 
 #include <algorithm>
 #include <array>
@@ -39,6 +41,8 @@ bool isAllowedAudioExtension (const juce::String& extLowerNoDot)
             return VisualizationMode::StrobeRadial;
         case 5:
             return VisualizationMode::ChordMatrix;
+        case 6:
+            return VisualizationMode::SyntheticPeaks;
         default:
             return VisualizationMode::Waveform;
     }
@@ -154,8 +158,14 @@ MainComponent::MainComponent()
     addAndMakeVisible (analysisRateCombo_);
     addAndMakeVisible (highPassSlider_);
     addAndMakeVisible (highPassLabel_);
+    addAndMakeVisible (peakThresholdSlider_);
+    addAndMakeVisible (peakProminenceSlider_);
+    addAndMakeVisible (peakThresholdLabel_);
+    addAndMakeVisible (peakProminenceLabel_);
+    addAndMakeVisible (maxPolyphonyCombo_);
     addAndMakeVisible (statusLabel_);
     addAndMakeVisible (engineLabel_);
+    addAndMakeVisible (waterfallPeakViewToggle_);
     addAndMakeVisible (vizModeCombo_);
     addAndMakeVisible (windowKindCombo_);
     addAndMakeVisible (backendCombo_);
@@ -185,8 +195,19 @@ MainComponent::MainComponent()
     vizModeCombo_.addItem ("Needle", 3);
     vizModeCombo_.addItem ("Strobe (poly + radial)", 4);
     vizModeCombo_.addItem ("Chord matrix", 5);
+    vizModeCombo_.addItem ("Synthetic peaks", 6);
+    vizModeCombo_.setTooltip ("Synthetic peaks: full-width lines. For scrolling peak history use Waterfall + Peak spectrum.");
     vizModeCombo_.setSelectedId (2, juce::dontSendNotification);
     vizModeCombo_.onChange = [this] { visualizationModeChanged(); };
+
+    waterfallPeakViewToggle_.setTooltip ("When on, the waterfall uses polyphonic peaks (sparse lines). When off, classic folded chroma.");
+    waterfallPeakViewToggle_.setToggleState (false, juce::dontSendNotification);
+    engine_.state().waterfallPeakViewEnabled.store (false, std::memory_order_relaxed);
+    waterfallPeakViewToggle_.onClick = [this] {
+        engine_.state().waterfallPeakViewEnabled.store (waterfallPeakViewToggle_.getToggleState(),
+                                                       std::memory_order_relaxed);
+        bumpInstantPreviewDebounced();
+    };
 
     windowKindCombo_.addItem ("Window: Hanning", 1);
     windowKindCombo_.addItem ("Window: Gaussian", 2);
@@ -429,6 +450,39 @@ MainComponent::MainComponent()
         bumpInstantPreviewDebounced();
     };
 
+    peakThresholdLabel_.setText ("Peak threshold", juce::dontSendNotification);
+    peakProminenceLabel_.setText ("Peak prominence", juce::dontSendNotification);
+    peakThresholdSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    peakProminenceSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    peakThresholdSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+    peakProminenceSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+    peakThresholdSlider_.setRange (0.0, 1.0, 0.001);
+    peakProminenceSlider_.setRange (0.0, 1.0, 0.001);
+    peakThresholdSlider_.setValue (0.05, juce::dontSendNotification);
+    peakProminenceSlider_.setValue (0.1, juce::dontSendNotification);
+    engine_.state().peakThreshold.store (0.05f, std::memory_order_relaxed);
+    engine_.state().peakProminence.store (0.1f, std::memory_order_relaxed);
+    peakThresholdSlider_.onValueChange = [this] {
+        engine_.state().peakThreshold.store (static_cast<float> (peakThresholdSlider_.getValue()),
+                                            std::memory_order_relaxed);
+    };
+    peakProminenceSlider_.onValueChange = [this] {
+        engine_.state().peakProminence.store (static_cast<float> (peakProminenceSlider_.getValue()),
+                                             std::memory_order_relaxed);
+    };
+
+    maxPolyphonyCombo_.addItem ("Max peaks: 8", 8);
+    maxPolyphonyCombo_.addItem ("Max peaks: 16", 16);
+    maxPolyphonyCombo_.addItem ("Max peaks: 32", 32);
+    maxPolyphonyCombo_.addItem ("Max peaks: 64", 64);
+    maxPolyphonyCombo_.setSelectedId (32, juce::dontSendNotification);
+    engine_.state().maxPolyphony.store (32, std::memory_order_relaxed);
+    maxPolyphonyCombo_.onChange = [this] {
+        const int id = maxPolyphonyCombo_.getSelectedId();
+        if (id > 0)
+            engine_.state().maxPolyphony.store (id, std::memory_order_relaxed);
+    };
+
     // Apply defaults once.
     waterfallEnergyScaleSlider_.onValueChange();
     waterfallAlphaPowerSlider_.onValueChange();
@@ -440,6 +494,8 @@ MainComponent::MainComponent()
     spectralBackendCombo_.onChange();
     analysisRateCombo_.onChange();
     highPassSlider_.onValueChange();
+    peakThresholdSlider_.onValueChange();
+    peakProminenceSlider_.onValueChange();
 
     statusLabel_.setJustificationType (juce::Justification::centredLeft);
     engineLabel_.setJustificationType (juce::Justification::centredLeft);
@@ -548,12 +604,29 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& buffe
     engine_.copyLatestRenderFrame (frame);
     activeRenderer_->setRenderFrame (frame);
 
+    const auto vizMode = mapComboIdToMode (vizModeCombo_.getSelectedId());
     const bool suppressWaterfall = instantPreviewToggle_.getToggleState()
                                  && inputMode_ == InputMode::FilePlayback && currentReader_ != nullptr
-                                 && mapComboIdToMode (vizModeCombo_.getSelectedId()) == VisualizationMode::Waterfall;
+                                 && vizMode == VisualizationMode::Waterfall;
 
     if (! suppressWaterfall)
-        activeRenderer_->pushWaterfallRow (std::span<const float> { frame.chromaRow.data(), frame.chromaRow.size() });
+    {
+        if (vizMode == VisualizationMode::Waterfall
+            && engine_.state().waterfallPeakViewEnabled.load (std::memory_order_relaxed))
+        {
+            pitchlab::fillWaterfallRowFromPeaks (
+                std::span<const pitchlab::PitchPeak> { frame.activePeaks.data(), frame.activePeaks.size() },
+                std::span<float> { waterfallPeakRowScratch_.data(), waterfallPeakRowScratch_.size() },
+                pitchlab::WaterfallFreqAxis::kVisMinHz,
+                pitchlab::WaterfallFreqAxis::kVisMaxHz);
+            activeRenderer_->pushWaterfallRow (
+                std::span<const float> { waterfallPeakRowScratch_.data(), waterfallPeakRowScratch_.size() });
+        }
+        else
+        {
+            activeRenderer_->pushWaterfallRow (std::span<const float> { frame.chromaRow.data(), frame.chromaRow.size() });
+        }
+    }
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -578,6 +651,8 @@ void MainComponent::resized()
 
     auto row2 = r.removeFromTop (26);
     vizModeCombo_.setBounds (row2.removeFromLeft (200).reduced (0, 2));
+    row2.removeFromLeft (8);
+    waterfallPeakViewToggle_.setBounds (row2.removeFromLeft (130).reduced (0, 2));
     row2.removeFromLeft (8);
     windowKindCombo_.setBounds (row2.removeFromLeft (180).reduced (0, 2));
     row2.removeFromLeft (8);
@@ -607,6 +682,16 @@ void MainComponent::resized()
     highPassSlider_.setBounds (hpRow.removeFromLeft (hpRow.getWidth() / 2).reduced (0, 2));
     hpRow.removeFromLeft (6);
     analysisRateCombo_.setBounds (hpRow.reduced (0, 2));
+
+    r.removeFromTop (4);
+    auto peakRow = r.removeFromTop (24);
+    peakThresholdLabel_.setBounds (peakRow.removeFromLeft (100).reduced (0, 2));
+    peakThresholdSlider_.setBounds (peakRow.removeFromLeft (peakRow.getWidth() / 3).reduced (0, 2));
+    peakRow.removeFromLeft (6);
+    peakProminenceLabel_.setBounds (peakRow.removeFromLeft (110).reduced (0, 2));
+    peakProminenceSlider_.setBounds (peakRow.removeFromLeft (peakRow.getWidth() / 2).reduced (0, 2));
+    peakRow.removeFromLeft (6);
+    maxPolyphonyCombo_.setBounds (peakRow.reduced (0, 2));
 
     r.removeFromTop (4);
     auto modelRow = r.removeFromTop (24);
@@ -1046,6 +1131,11 @@ void MainComponent::syncOfflineEngineFromLive (double analysisSampleRate)
                                     std::memory_order_relaxed);
     O.highPassCutoffHz.store (L.highPassCutoffHz.load (std::memory_order_relaxed), std::memory_order_relaxed);
     O.maxHarmonicK.store (L.maxHarmonicK.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.peakThreshold.store (L.peakThreshold.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.peakProminence.store (L.peakProminence.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.maxPolyphony.store (L.maxPolyphony.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.waterfallPeakViewEnabled.store (L.waterfallPeakViewEnabled.load (std::memory_order_relaxed),
+                                       std::memory_order_relaxed);
 }
 
 void MainComponent::bumpInstantPreviewDebounced()
@@ -1163,9 +1253,22 @@ void MainComponent::launchInstantWaterfallJob()
 
                 readMonoFloatWindow (*reader, offlineNativeSamples, endSample, win);
                 offlineEngine_.analyzeOfflineWindowFromMonoFloat (std::span<const float> { win.data(), win.size() }, frame);
-                std::copy (frame.chromaRow.begin(),
-                           frame.chromaRow.end(),
-                           grid.begin() + static_cast<std::size_t> (col) * static_cast<std::size_t> (kBins));
+                const bool peakView = offlineEngine_.state().waterfallPeakViewEnabled.load (std::memory_order_relaxed);
+                const std::span<float> colSpan {
+                    grid.data() + static_cast<std::size_t> (col) * static_cast<std::size_t> (kBins),
+                    static_cast<std::size_t> (kBins) };
+                if (peakView)
+                {
+                    pitchlab::fillWaterfallRowFromPeaks (
+                        std::span<const pitchlab::PitchPeak> { frame.activePeaks.data(), frame.activePeaks.size() },
+                        colSpan,
+                        pitchlab::WaterfallFreqAxis::kVisMinHz,
+                        pitchlab::WaterfallFreqAxis::kVisMaxHz);
+                }
+                else
+                {
+                    std::copy (frame.chromaRow.begin(), frame.chromaRow.end(), colSpan.begin());
+                }
             }
         }
 

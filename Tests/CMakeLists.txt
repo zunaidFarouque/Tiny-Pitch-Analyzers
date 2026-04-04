@@ -18,6 +18,7 @@ add_executable(PitchLabEngineTests
     test_offline_hop.cpp
     test_optimizations.cpp
     test_pitch_from_spectrum.cpp
+    test_polyphonic_picker.cpp
     test_pitch_lab_engine.cpp
     test_render_frame_snapshot.cpp
     test_renderer_backend_policy.cpp
@@ -27,6 +28,7 @@ add_executable(PitchLabEngineTests
     test_viz_export_smoke.cpp
     test_waterfall_direction.cpp
     test_window_q24.cpp
+    test_waterfall_peak_row.cpp
 )
 
 target_link_libraries(PitchLabEngineTests PRIVATE

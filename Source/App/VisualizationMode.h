@@ -6,6 +6,7 @@ enum class VisualizationMode : int
     Waterfall = 1,
     Needle = 2,
     StrobeRadial = 3,
-    ChordMatrix = 4
+    ChordMatrix = 4,
+    SyntheticPeaks = 5
 };
 

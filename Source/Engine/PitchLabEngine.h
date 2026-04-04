@@ -4,6 +4,7 @@
 #include "CircularInt16Buffer.h"
 #include "Decimator4x.h"
 #include "EngineState.h"
+#include "PitchPeak.h"
 #include "RenderFrameData.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -109,6 +110,8 @@ private:
     ChromaMap chromaMap_;
 
     std::vector<float> magForFold_;
+    std::vector<PitchPeak> currentPeaks_;
+    std::vector<PitchPeak> peakPickerScratch_;
     std::array<float, 384> chromaRow_ {};
     juce::dsp::IIR::Filter<float> highPassFilter_;
     juce::dsp::IIR::Filter<float> lfHighPassFilter_;
