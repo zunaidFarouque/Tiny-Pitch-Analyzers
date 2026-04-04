@@ -5,6 +5,7 @@
 #include "VizCpuRenderer.h"
 
 #include <JuceHeader.h>
+#include <vector>
 
 class CpuVisualizerHost final : public juce::Component,
                                 public IRendererHost
@@ -19,6 +20,11 @@ public:
     void setStaticTablesPtr (const pitchlab::StaticTables* tables) noexcept override { tables_ = tables; }
     void setRenderFrame (const pitchlab::RenderFrameData& frame) noexcept override;
     void pushWaterfallRow (std::span<const float> row384) override;
+    void commitWaterfallGrid384 (std::span<const float> rowMajor384x384) noexcept override;
+    void setWaterfallEnergyScale (float s) noexcept;
+    void setWaterfallAlphaPower (float p) noexcept;
+    void setWaterfallAlphaThreshold (float t) noexcept;
+    void setWaterfallDisplayCurveMode (pitchlab::WaterfallDisplayCurveMode m) noexcept;
 
     void paint (juce::Graphics& g) override;
 
@@ -30,5 +36,8 @@ private:
     pitchlab::RenderFrameData frame_{};
     SharedWaterfallRing waterfallRing_;
     juce::CriticalSection frameLock_;
+    pitchlab::WaterfallRenderParams waterfallParams_ {};
+    std::vector<float> waterfallGridStorage_;
+    bool hasWaterfallGrid_ = false;
 };
 

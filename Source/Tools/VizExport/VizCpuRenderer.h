@@ -26,12 +26,23 @@ struct VizFrameData
     float tuningError = 0.0f;
     float strobePhase = 0.0f;
     int waterfallWriteY = 1; // mirrors one uploaded row in the film reel
+    /** If non-null, 384×384 row-major (row=time, col=chroma); overrides repeated chromaRow for waterfall. */
+    const float* waterfallGrid384 = nullptr;
+};
+
+struct WaterfallRenderParams
+{
+    float energyScale = 0.064f;
+    float alphaPower = 2.55f;
+    float alphaThreshold = 0.0050f;
+    WaterfallDisplayCurveMode curveMode = WaterfallDisplayCurveMode::Sqrt;
 };
 
 class VizCpuRenderer
 {
 public:
     VizCpuRenderer (int width, int height);
+    void setWaterfallRenderParams (const WaterfallRenderParams& p) noexcept;
 
     [[nodiscard]] juce::Image render (VizMode mode,
                                       const VizFrameData& frame,
@@ -46,6 +57,7 @@ private:
 
     int width_ = 1024;
     int height_ = 384;
+    WaterfallRenderParams waterfallParams_ {};
 };
 
 [[nodiscard]] const char* modeToName (VizMode mode) noexcept;

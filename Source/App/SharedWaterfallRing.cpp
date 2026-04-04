@@ -44,3 +44,10 @@ int SharedWaterfallRing::writeY() const noexcept
     return writeY_;
 }
 
+void SharedWaterfallRing::syncWriteHeadAfterBulkStaticFill() noexcept
+{
+    const juce::ScopedLock sl (lock_);
+    writeY_ = 0;
+    hasPending_ = false;
+}
+

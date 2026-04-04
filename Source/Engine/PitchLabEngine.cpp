@@ -3,10 +3,12 @@
 #include "AgcInt16.h"
 #include "ChromaFolder.h"
 #include "ChromaMap.h"
+#include "ChromaPostProcess.h"
 #include "FftMagnitudes.h"
 #include "FloatIngress.h"
 #include "PitchFromSpectrum.h"
 #include "PitchLabChord.h"
+#include "SpectralMagSmear.h"
 #include "StaticTables.h"
 #include "WindowApplyQ24.h"
 
@@ -68,8 +70,19 @@ void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
     windowed_.assign (static_cast<std::size_t> (n), static_cast<std::int16_t> (0));
     floatFftIn_.assign (static_cast<std::size_t> (n), 0.0f);
     magSpectrum_.assign (static_cast<std::size_t> (n / 2 + 1), 0.0f);
+    magForFold_.assign (static_cast<std::size_t> (n / 2 + 1), 0.0f);
     chromaRow_.fill (0.0f);
     chromaMap_.rebuild (sampleRate, n);
+
+    juce::dsp::ProcessSpec hpSpec;
+    hpSpec.sampleRate = sampleRate;
+    hpSpec.maximumBlockSize = (juce::uint32) std::max (maxBlockSamples, n);
+    hpSpec.numChannels = 1;
+    highPassFilter_.prepare (hpSpec);
+    highPassFilter_.reset();
+    lastHighPassCutHz_ = -1.0f;
+    lastHighPassSr_ = 0.0;
+    analysisDecimationCounter_ = 0;
     {
         const std::scoped_lock lk (frameMutex_);
         latestFrame_ = RenderFrameData {};
@@ -94,6 +107,7 @@ void PitchLabEngine::reset()
     state_.viewScrollX = 0.0f;
     state_.strobePhase = 0.0f;
     chromaRow_.fill (0.0f);
+    analysisDecimationCounter_ = 0;
     {
         const std::scoped_lock lk (frameMutex_);
         latestFrame_ = RenderFrameData {};
@@ -115,7 +129,9 @@ void PitchLabEngine::runAnalysisChain() noexcept
 
     ingress_.copyLatestInto (std::span<std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) });
 
-    applyAgcInt16InPlace (std::span<std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) });
+    applyAgcInt16InPlace (std::span<std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) },
+                          state_.agcEnabled.load (std::memory_order_relaxed),
+                          state_.agcStrength.load (std::memory_order_relaxed));
 
     applyHanningWindowQ24 (std::span<const std::int16_t> { timeWindow_.data(), static_cast<std::size_t> (n) },
                            std::span<std::int16_t> { windowed_.data(), static_cast<std::size_t> (n) },
@@ -124,15 +140,47 @@ void PitchLabEngine::runAnalysisChain() noexcept
     for (int i = 0; i < n; ++i)
         floatFftIn_[static_cast<std::size_t> (i)] = static_cast<float> (windowed_[static_cast<std::size_t> (i)]) * (1.0f / 32768.0f);
 
+    const float hpCut = state_.highPassCutoffHz.load (std::memory_order_relaxed);
+    if (hpCut >= EngineState::kHighPassOffHz && state_.sampleRate > 0.0)
+    {
+        if (hpCut != lastHighPassCutHz_ || state_.sampleRate != lastHighPassSr_)
+        {
+            lastHighPassCutHz_ = hpCut;
+            lastHighPassSr_ = state_.sampleRate;
+            highPassFilter_.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass (
+                static_cast<float> (state_.sampleRate), hpCut, 0.707f);
+        }
+        float* line = floatFftIn_.data();
+        juce::dsp::AudioBlock<float> block (&line, 1, static_cast<size_t> (n));
+        juce::dsp::ProcessContextReplacing<float> ctx (block);
+        highPassFilter_.process (ctx);
+    }
+
     fft_->computePowerSpectrum (std::span<const float> { floatFftIn_.data(), floatFftIn_.size() },
                                 std::span<float> { magSpectrum_.data(), magSpectrum_.size() });
 
+    buildMagForFold (std::span<const float> { magSpectrum_.data(), magSpectrum_.size() },
+                     std::span<float> { magForFold_.data(), magForFold_.size() },
+                     state_.sampleRate,
+                     n,
+                     state_.spectralBackendMode());
+
+    FoldToChromaSettings foldSettings;
+    foldSettings.interpMode = state_.foldInterpMode();
+    foldSettings.harmonicWeightMode = state_.foldHarmonicWeightMode();
+    foldSettings.maxOctaves = state_.foldMaxOctaves.load (std::memory_order_relaxed);
+    foldSettings.harmonicModel = state_.foldHarmonicModel();
+    foldSettings.maxHarmonicK = state_.maxHarmonicK.load (std::memory_order_relaxed);
     foldToChroma384 (chromaMap_,
                      state_.sampleRate,
                      n,
-                     std::span<const float> { magSpectrum_.data(), magSpectrum_.size() },
+                     std::span<const float> { magForFold_.data(), magForFold_.size() },
                      std::span<float> { chromaRow_.data(), chromaRow_.size() },
-                     std::span<std::uint8_t> { state_.octaveHarmonicIndex.data(), state_.octaveHarmonicIndex.size() });
+                     std::span<std::uint8_t> { state_.octaveHarmonicIndex.data(), state_.octaveHarmonicIndex.size() },
+                     foldSettings);
+
+    applyChromaShaping384 (state_.chromaShapingMode(),
+                           std::span<float> { chromaRow_.data(), chromaRow_.size() });
 
     const float peakBin = refinedPeakBin (std::span<const float> { magSpectrum_.data(), magSpectrum_.size() });
     state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, n);
@@ -170,7 +218,13 @@ void PitchLabEngine::processAudioInterleaved (const float* const* channelData, i
     ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (numSamples) });
     state_.analysisDirty.store (true, std::memory_order_release);
 
-    runAnalysisChain();
+    const int every = std::max (1, state_.analysisEveryNCallbacks.load (std::memory_order_relaxed));
+    ++analysisDecimationCounter_;
+    if (analysisDecimationCounter_ >= every)
+    {
+        analysisDecimationCounter_ = 0;
+        runAnalysisChain();
+    }
 }
 
 void PitchLabEngine::copyIngressLatest (std::span<std::int16_t> dst) const noexcept
@@ -189,6 +243,28 @@ void PitchLabEngine::copyLatestRenderFrame (RenderFrameData& dst) const noexcept
 {
     const std::scoped_lock lk (frameMutex_);
     dst = latestFrame_;
+}
+
+void PitchLabEngine::analyzeOfflineWindowFromMonoFloat (std::span<const float> monoFftWindow, RenderFrameData& out)
+{
+    std::unique_lock lk (configMutex_);
+    const int n = state_.fftSize;
+    if (static_cast<int> (monoFftWindow.size()) != n || fft_ == nullptr || tables_ == nullptr
+        || static_cast<int> (conversionScratch_.size()) < n)
+        return;
+
+    ingress_.reset();
+    analysisDecimationCounter_ = 0;
+    state_.strobePhase = 0.0f;
+    highPassFilter_.reset();
+    lastHighPassCutHz_ = -1.0f;
+    lastHighPassSr_ = 0.0;
+
+    convertFloatToInt16Ingress (monoFftWindow,
+                                std::span<std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+    ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+    runAnalysisChain();
+    copyLatestRenderFrame (out);
 }
 
 } // namespace pitchlab

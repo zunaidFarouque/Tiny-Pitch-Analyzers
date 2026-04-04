@@ -9,7 +9,46 @@ void CpuVisualizerHost::setRenderFrame (const pitchlab::RenderFrameData& frame) 
 
 void CpuVisualizerHost::pushWaterfallRow (std::span<const float> row384)
 {
+    hasWaterfallGrid_ = false;
     waterfallRing_.pushRow (row384);
+}
+
+void CpuVisualizerHost::commitWaterfallGrid384 (std::span<const float> rowMajor384x384) noexcept
+{
+    constexpr int kCells = SharedWaterfallRing::kRowBins * SharedWaterfallRing::kRows;
+    if (rowMajor384x384.size() < static_cast<std::size_t> (kCells))
+        return;
+
+    const juce::ScopedLock sl (frameLock_);
+    waterfallGridStorage_.assign (rowMajor384x384.begin(),
+                                  rowMajor384x384.begin() + static_cast<std::ptrdiff_t> (kCells));
+    hasWaterfallGrid_ = true;
+    waterfallRing_.syncWriteHeadAfterBulkStaticFill();
+    repaint();
+}
+
+void CpuVisualizerHost::setWaterfallEnergyScale (float s) noexcept
+{
+    const juce::ScopedLock sl (frameLock_);
+    waterfallParams_.energyScale = juce::jmax (0.0f, s);
+}
+
+void CpuVisualizerHost::setWaterfallAlphaPower (float p) noexcept
+{
+    const juce::ScopedLock sl (frameLock_);
+    waterfallParams_.alphaPower = juce::jmax (0.0f, p);
+}
+
+void CpuVisualizerHost::setWaterfallAlphaThreshold (float t) noexcept
+{
+    const juce::ScopedLock sl (frameLock_);
+    waterfallParams_.alphaThreshold = juce::jmax (0.0f, t);
+}
+
+void CpuVisualizerHost::setWaterfallDisplayCurveMode (pitchlab::WaterfallDisplayCurveMode m) noexcept
+{
+    const juce::ScopedLock sl (frameLock_);
+    waterfallParams_.curveMode = m;
 }
 
 pitchlab::VizMode CpuVisualizerHost::toVizMode (VisualizationMode m) const noexcept
@@ -40,8 +79,10 @@ void CpuVisualizerHost::paint (juce::Graphics& g)
     vf.tuningError = frame.tuningError;
     vf.strobePhase = frame.strobePhase;
     vf.waterfallWriteY = waterfallRing_.writeY();
+    vf.waterfallGrid384 = hasWaterfallGrid_ ? waterfallGridStorage_.data() : nullptr;
 
     pitchlab::VizCpuRenderer renderer (juce::jmax (1, getWidth()), juce::jmax (1, getHeight()));
+    renderer.setWaterfallRenderParams (waterfallParams_);
     const juce::Image img = renderer.render (toVizMode (mode_), vf, tables_);
     g.drawImageAt (img, 0, 0);
 

@@ -30,6 +30,7 @@ struct CliOptions
     int height = 384;
     float maxMeanAbsDiff = 0.0f;
     juce::Array<pitchlab::VizMode> modes;
+    pitchlab::WaterfallRenderParams waterfallParams;
 };
 
 void printUsage()
@@ -41,6 +42,10 @@ void printUsage()
                  "  --modes <csv|all>       waveform,waterfall,needle,stroberadial,chordmatrix\n"
                  "  --width <int>           output width (default 1024)\n"
                  "  --height <int>          output height (default 384)\n"
+                 "  --wf-energy <float>     waterfall energy scale (default 0.03)\n"
+                 "  --wf-alpha-pow <float>  waterfall alpha power (default 1.0)\n"
+                 "  --wf-thresh <float>     waterfall alpha threshold (default 0.005)\n"
+                 "  --wf-curve <linear|sqrt|logdb> waterfall curve mode (default sqrt)\n"
                  "  --verify <dir>          optional golden directory to compare\n"
                  "  --max-mean-abs-diff <f> allowed per-channel mean absolute diff (default 0)\n";
 }
@@ -62,6 +67,17 @@ bool parseArgs (int argc, char** argv, CliOptions& opt)
         else if (a == "--width" && needValue()) opt.width = juce::String (argv[++i]).getIntValue();
         else if (a == "--height" && needValue()) opt.height = juce::String (argv[++i]).getIntValue();
         else if (a == "--max-mean-abs-diff" && needValue()) opt.maxMeanAbsDiff = juce::String (argv[++i]).getFloatValue();
+        else if (a == "--wf-energy" && needValue()) opt.waterfallParams.energyScale = juce::String (argv[++i]).getFloatValue();
+        else if (a == "--wf-alpha-pow" && needValue()) opt.waterfallParams.alphaPower = juce::String (argv[++i]).getFloatValue();
+        else if (a == "--wf-thresh" && needValue()) opt.waterfallParams.alphaThreshold = juce::String (argv[++i]).getFloatValue();
+        else if (a == "--wf-curve" && needValue())
+        {
+            const auto t = juce::String (argv[++i]).toLowerCase();
+            if (t == "linear") opt.waterfallParams.curveMode = pitchlab::WaterfallDisplayCurveMode::Linear;
+            else if (t == "sqrt") opt.waterfallParams.curveMode = pitchlab::WaterfallDisplayCurveMode::Sqrt;
+            else if (t == "logdb") opt.waterfallParams.curveMode = pitchlab::WaterfallDisplayCurveMode::LogDb;
+            else return false;
+        }
         else if (a == "--modes" && needValue())
         {
             juce::Array<pitchlab::VizMode> parsed;
@@ -205,6 +221,7 @@ int main (int argc, char** argv)
     }
 
     pitchlab::VizCpuRenderer renderer (opt.width, opt.height);
+    renderer.setWaterfallRenderParams (opt.waterfallParams);
     const auto* tables = eng.tables();
     for (auto mode : opt.modes)
     {

@@ -4,17 +4,20 @@ add_executable(PitchLabEngineTests
     test_agc.cpp
     test_chord.cpp
     test_chroma_map.cpp
+    test_chroma_post.cpp
     test_copy_latest.cpp
     test_circular_buffer.cpp
     test_engine_state.cpp
     test_fft_chroma.cpp
     test_float_ingress.cpp
     test_null_pipeline.cpp
+    test_offline_hop.cpp
     test_optimizations.cpp
     test_pitch_from_spectrum.cpp
     test_pitch_lab_engine.cpp
     test_render_frame_snapshot.cpp
     test_renderer_backend_policy.cpp
+    test_spectral_mag_smear.cpp
     test_shared_waterfall_ring.cpp
     test_static_tables.cpp
     test_viz_export_smoke.cpp

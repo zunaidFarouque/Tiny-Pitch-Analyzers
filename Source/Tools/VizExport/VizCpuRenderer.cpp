@@ -47,6 +47,11 @@ VizCpuRenderer::VizCpuRenderer (int width, int height)
 {
 }
 
+void VizCpuRenderer::setWaterfallRenderParams (const WaterfallRenderParams& p) noexcept
+{
+    waterfallParams_ = p;
+}
+
 juce::Image VizCpuRenderer::render (VizMode mode, const VizFrameData& frame, const StaticTables* tables) const
 {
     switch (mode)
@@ -68,7 +73,7 @@ juce::Image VizCpuRenderer::renderWaveform (const VizFrameData& frame) const
     g.setColour (juce::Colour::fromFloatRGBA (0.35f, 0.85f, 1.0f, 1.0f));
 
     juce::Path p;
-    constexpr int n = static_cast<int> (frame.waveform.size());
+    const int n = static_cast<int> (frame.waveform.size());
     for (int i = 0; i < n; ++i)
     {
         const float x = static_cast<float> (i) / static_cast<float> (n - 1) * static_cast<float> (width_ - 1);
@@ -96,13 +101,25 @@ juce::Image VizCpuRenderer::renderWaterfall (const VizFrameData& frame) const
             // CPU short-term policy: we only have one 384-bin chroma row, so we treat that row as repeated
             // across all time/history rows. The mapping still matters (direction + folding).
             const waterfall::WaterfallSample s = waterfall::mapWaterfallPixel (x, y, width_, height_, frame.waterfallWriteY);
-            const float v = frame.chromaRow[static_cast<std::size_t> (s.chromaIndex)];
+            const float v = (frame.waterfallGrid384 != nullptr)
+                                ? frame.waterfallGrid384[static_cast<std::size_t> (s.timeIndex) * waterfall::kChromaBins
+                                                          + static_cast<std::size_t> (s.chromaIndex)]
+                                : frame.chromaRow[static_cast<std::size_t> (s.chromaIndex)];
 
-            const float m = std::clamp (std::sqrt (std::max (0.0f, v)) * 0.12f, 0.0f, 1.0f);
-            const std::uint8_t r = static_cast<std::uint8_t> (m * 255.0f);
-            const std::uint8_t g = static_cast<std::uint8_t> (m * 215.0f);
-            const std::uint8_t b = static_cast<std::uint8_t> (m * 140.0f);
-            px.setPixelColour (x, y, juce::Colour::fromRGB (r, g, b));
+            const float xv = std::max (0.0f, v);
+            float m = std::clamp (xv * waterfallParams_.energyScale, 0.0f, 1.0f);
+            if (waterfallParams_.curveMode == WaterfallDisplayCurveMode::Sqrt)
+                m = std::clamp (std::sqrt (xv) * waterfallParams_.energyScale, 0.0f, 1.0f);
+            else if (waterfallParams_.curveMode == WaterfallDisplayCurveMode::LogDb)
+            {
+                const float db = 20.0f * std::log10 (std::max (xv, 1.0e-12f));
+                m = std::clamp ((db + 100.0f) / 100.0f, 0.0f, 1.0f);
+            }
+            float a = std::pow (m, std::max (0.0f, waterfallParams_.alphaPower));
+            if (a < std::max (0.0f, waterfallParams_.alphaThreshold))
+                a = 0.0f;
+            const std::uint8_t c = static_cast<std::uint8_t> (std::clamp (a, 0.0f, 1.0f) * 255.0f);
+            px.setPixelColour (x, y, juce::Colour::fromRGB (c, c, c));
         }
     }
 

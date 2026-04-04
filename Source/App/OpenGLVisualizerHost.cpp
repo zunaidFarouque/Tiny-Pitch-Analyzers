@@ -53,15 +53,22 @@ uniform sampler2D tex;
 uniform float uEnergyScale;
 uniform float uAlphaPower;
 uniform float uAlphaThreshold;
+uniform float uDisplayCurveMode;
 varying lowp vec2 vUV;
 varying lowp vec4 vCol;
 void main()
 {
     const float e = texture2D (tex, vec2 (vUV.y, vUV.x)).r;
-    // Intensity mapping (grayscale):
-    // We intentionally use a conservative scale so "no pitch / white noise" stays dark
-    // instead of clamping to pure white everywhere.
-    const float m = clamp (sqrt (max (e, 0.0)) * uEnergyScale, 0.0, 1.0);
+    const float x = max (e, 0.0);
+    float m = clamp (x * uEnergyScale, 0.0, 1.0);
+    if (uDisplayCurveMode > 0.5 && uDisplayCurveMode < 1.5)
+        m = clamp (sqrt (x) * uEnergyScale, 0.0, 1.0);
+    else if (uDisplayCurveMode >= 1.5)
+    {
+        // Approximate dB-domain compression for improved line separation.
+        const float db = 20.0 * log (max (x, 1.0e-12)) / log (10.0);
+        m = clamp ((db + 100.0) / 100.0, 0.0, 1.0);
+    }
     // More intense => brighter pixel.
     float alpha = pow (m, uAlphaPower);
     // Suppress low-energy speckle/noise.
@@ -115,13 +122,22 @@ uniform sampler2D tex;
 uniform float uEnergyScale;
 uniform float uAlphaPower;
 uniform float uAlphaThreshold;
+uniform float uDisplayCurveMode;
 in vec2 vUV;
 in vec4 vCol;
 out vec4 fragColor;
 void main()
 {
     float e = texture (tex, vec2 (vUV.y, vUV.x)).r;
-    float m = clamp (sqrt (max (e, 0.0)) * uEnergyScale, 0.0, 1.0);
+    float x = max (e, 0.0);
+    float m = clamp (x * uEnergyScale, 0.0, 1.0);
+    if (uDisplayCurveMode > 0.5 && uDisplayCurveMode < 1.5)
+        m = clamp (sqrt (x) * uEnergyScale, 0.0, 1.0);
+    else if (uDisplayCurveMode >= 1.5)
+    {
+        float db = 20.0 * log (max (x, 1.0e-12)) / log (10.0);
+        m = clamp ((db + 100.0) / 100.0, 0.0, 1.0);
+    }
     // PitchLab-style compositing: intensity drives alpha, not an always-on lane-color underlay.
     // Compress low energies so empty background stays near-black.
     float alpha = pow (m, uAlphaPower);
@@ -202,6 +218,7 @@ void OpenGLVisualizerHost::newOpenGLContextCreated()
     waterfallEnergyScaleUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uEnergyScale");
     waterfallAlphaPowerUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uAlphaPower");
     waterfallAlphaThresholdUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uAlphaThreshold");
+    waterfallDisplayCurveModeUniform_ = std::make_unique<juce::OpenGLShaderProgram::Uniform> (*waterfallTexShader_, "uDisplayCurveMode");
 
     auto& gl = openGLContext_.extensions;
     gl.glGenBuffers (1, &lineVbo_);
@@ -223,7 +240,7 @@ void OpenGLVisualizerHost::newOpenGLContextCreated()
                       && waterfallTexPosAttrib_ != nullptr && waterfallTexUvAttrib_ != nullptr
                       && waterfallTexColorAttrib_ != nullptr && waterfallTexSamplerUniform_ != nullptr
                       && waterfallEnergyScaleUniform_ != nullptr && waterfallAlphaPowerUniform_ != nullptr
-                      && waterfallAlphaThresholdUniform_ != nullptr
+                      && waterfallAlphaThresholdUniform_ != nullptr && waterfallDisplayCurveModeUniform_ != nullptr
                       && lineVbo_ != 0 && waterfallVbo_ != 0 && dynamicVbo_ != 0;
 }
 
@@ -240,6 +257,16 @@ void OpenGLVisualizerHost::setWaterfallAlphaPower (float p) noexcept
 void OpenGLVisualizerHost::setWaterfallAlphaThreshold (float t) noexcept
 {
     waterfallAlphaThreshold_.store (juce::jmax (0.0f, t), std::memory_order_relaxed);
+}
+
+void OpenGLVisualizerHost::setWaterfallDisplayCurveMode (pitchlab::WaterfallDisplayCurveMode m) noexcept
+{
+    waterfallDisplayCurveModeRaw_.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+}
+
+void OpenGLVisualizerHost::setWaterfallTextureFilterMode (pitchlab::WaterfallTextureFilterMode m) noexcept
+{
+    waterfallTextureFilterModeRaw_.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
 }
 
 void OpenGLVisualizerHost::openGLContextClosing()
@@ -307,11 +334,26 @@ void OpenGLVisualizerHost::openGLContextClosing()
     waterfallEnergyScaleUniform_.reset();
     waterfallAlphaPowerUniform_.reset();
     waterfallAlphaThresholdUniform_.reset();
+    waterfallDisplayCurveModeUniform_.reset();
 }
 
 void OpenGLVisualizerHost::pushWaterfallRow (std::span<const float> row384)
 {
     waterfallRing_.pushRow (row384);
+}
+
+void OpenGLVisualizerHost::commitWaterfallGrid384 (std::span<const float> rowMajor384x384) noexcept
+{
+    constexpr int kCells = SharedWaterfallRing::kRowBins * SharedWaterfallRing::kRows;
+    if (rowMajor384x384.size() < static_cast<std::size_t> (kCells))
+        return;
+
+    {
+        const juce::ScopedLock sl (waterfallBulkLock_);
+        waterfallBulkPending_.assign (rowMajor384x384.begin(),
+                                      rowMajor384x384.begin() + static_cast<std::ptrdiff_t> (kCells));
+    }
+    waterfallBulkUploadPending_.store (true, std::memory_order_release);
 }
 
 void OpenGLVisualizerHost::createFilmTextureIfNeeded()
@@ -322,8 +364,9 @@ void OpenGLVisualizerHost::createFilmTextureIfNeeded()
     using namespace juce::gl;
     glGenTextures (1, &waterfallTex_);
     glBindTexture (GL_TEXTURE_2D, waterfallTex_);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const auto filter = static_cast<pitchlab::WaterfallTextureFilterMode> (waterfallTextureFilterModeRaw_.load (std::memory_order_relaxed));
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter == pitchlab::WaterfallTextureFilterMode::Nearest ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter == pitchlab::WaterfallTextureFilterMode::Nearest ? GL_NEAREST : GL_LINEAR);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
@@ -361,6 +404,40 @@ void OpenGLVisualizerHost::renderOpenGL()
     // Black background per grayscale waterfall requirements.
     glClearColor (0.0f, 0.0f, 0.0f, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT);
+
+    if (waterfallBulkUploadPending_.exchange (false, std::memory_order_acq_rel))
+    {
+        createFilmTextureIfNeeded();
+        std::vector<float> bulk;
+        {
+            const juce::ScopedLock sl (waterfallBulkLock_);
+            bulk.swap (waterfallBulkPending_);
+        }
+
+        if (waterfallTex_ != 0 && static_cast<int> (bulk.size()) >= SharedWaterfallRing::kRowBins * SharedWaterfallRing::kRows)
+        {
+            using namespace juce::gl;
+            glBindTexture (GL_TEXTURE_2D, waterfallTex_);
+            for (int y = 0; y < SharedWaterfallRing::kRows; ++y)
+            {
+                glTexSubImage2D (GL_TEXTURE_2D,
+                                 0,
+                                 0,
+                                 y,
+                                 SharedWaterfallRing::kRowBins,
+                                 1,
+#if JUCE_OPENGL_ES
+                                 GL_LUMINANCE,
+#else
+                                 GL_RED,
+#endif
+                                 GL_FLOAT,
+                                 bulk.data() + static_cast<std::size_t> (y) * static_cast<std::size_t> (SharedWaterfallRing::kRowBins));
+            }
+            glBindTexture (GL_TEXTURE_2D, 0);
+            waterfallRing_.syncWriteHeadAfterBulkStaticFill();
+        }
+    }
 
     std::array<float, 384> row {};
     int rowY = 0;
@@ -501,11 +578,19 @@ void OpenGLVisualizerHost::renderWaterfall()
 
     juce::gl::glActiveTexture (juce::gl::GL_TEXTURE0);
     juce::gl::glBindTexture (juce::gl::GL_TEXTURE_2D, waterfallTex_);
+    {
+        const auto filter = static_cast<pitchlab::WaterfallTextureFilterMode> (waterfallTextureFilterModeRaw_.load (std::memory_order_relaxed));
+        juce::gl::glTexParameteri (juce::gl::GL_TEXTURE_2D, juce::gl::GL_TEXTURE_MIN_FILTER,
+                                   filter == pitchlab::WaterfallTextureFilterMode::Nearest ? juce::gl::GL_NEAREST : juce::gl::GL_LINEAR);
+        juce::gl::glTexParameteri (juce::gl::GL_TEXTURE_2D, juce::gl::GL_TEXTURE_MAG_FILTER,
+                                   filter == pitchlab::WaterfallTextureFilterMode::Nearest ? juce::gl::GL_NEAREST : juce::gl::GL_LINEAR);
+    }
     waterfallTexShader_->use();
     waterfallTexSamplerUniform_->set (0);
     waterfallEnergyScaleUniform_->set (waterfallEnergyScale_.load (std::memory_order_relaxed));
     waterfallAlphaPowerUniform_->set (waterfallAlphaPower_.load (std::memory_order_relaxed));
     waterfallAlphaThresholdUniform_->set (waterfallAlphaThreshold_.load (std::memory_order_relaxed));
+    waterfallDisplayCurveModeUniform_->set (static_cast<float> (waterfallDisplayCurveModeRaw_.load (std::memory_order_relaxed)));
 
     auto& gl = openGLContext_.extensions;
     gl.glBindBuffer (juce::gl::GL_ARRAY_BUFFER, waterfallVbo_);

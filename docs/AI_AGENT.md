@@ -26,11 +26,11 @@ cmake --build build --config Debug
 **If CMake errors because there is no usable `build/`** (no cache, wrong generator, user deleted `build/`):
 
 ```bash
-cmake -B build -S . -G "Visual Studio 18 2026" -A x64
+cmake -B build -S . -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Debug
 ```
 
-If **Visual Studio 18 2026** is not installed, use `-G "Visual Studio 17 2022" -A x64` instead.
+If only **Visual Studio 18 2026** is installed, use `-G "Visual Studio 18 2026" -A x64` instead.
 
 On failure: fix **this repo’s** `Source/`, `Tests/`, or top-level `CMakeLists.txt` — **do not** change [JUCE/](../JUCE/) for application behavior.
 

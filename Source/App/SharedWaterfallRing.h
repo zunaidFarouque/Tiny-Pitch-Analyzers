@@ -24,6 +24,9 @@ public:
     void latestRow (std::array<float, kRowBins>& outRow) const;
     [[nodiscard]] int writeY() const noexcept;
 
+    /** After uploading rows 0..kRows-1 with oldest at 0 and newest at kRows-1, set head so UV math matches. */
+    void syncWriteHeadAfterBulkStaticFill() noexcept;
+
 private:
     mutable juce::CriticalSection lock_;
     std::array<float, kRowBins> latestRow_ {};

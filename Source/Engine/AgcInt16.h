@@ -12,4 +12,7 @@ namespace pitchlab
 /** Destructive AGC: scale window so peak magnitude becomes 32767 (integer ratio). */
 void applyAgcInt16InPlace (std::span<std::int16_t> window) noexcept;
 
+/** Configurable AGC: optional enable and strength blend (0 = bypass, 1 = full AGC). */
+void applyAgcInt16InPlace (std::span<std::int16_t> window, bool enabled, float strength) noexcept;
+
 } // namespace pitchlab

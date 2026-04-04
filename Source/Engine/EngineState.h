@@ -15,6 +15,55 @@ enum class WindowKind : std::uint8_t
     Gaussian = 1
 };
 
+enum class FoldInterpMode : std::uint8_t
+{
+    Nearest = 0,
+    Linear2Bin = 1,
+    Quadratic3Bin = 2
+};
+
+enum class FoldHarmonicWeightMode : std::uint8_t
+{
+    Uniform = 0,
+    InvH = 1,
+    InvSqrtH = 2
+};
+
+enum class WaterfallDisplayCurveMode : std::uint8_t
+{
+    Linear = 0,
+    Sqrt = 1,
+    LogDb = 2
+};
+
+enum class WaterfallTextureFilterMode : std::uint8_t
+{
+    Nearest = 0,
+    Linear = 1
+};
+
+enum class ChromaShapingMode : std::uint8_t
+{
+    None = 0,
+    LogCompress = 1,
+    NoiseFloorSubtract = 2,
+    PercentileGate = 3
+};
+
+/** Document-style octave stack vs all integer harmonics k * f0. */
+enum class FoldHarmonicModel : std::uint8_t
+{
+    OctaveStack_Doc_v1 = 0,
+    IntegerHarmonics_v0_2 = 1
+};
+
+enum class SpectralBackendMode : std::uint8_t
+{
+    STFT_v1_0 = 0,
+    ConstQApprox_v0_1 = 1,
+    VariableQApprox_v0_1 = 2
+};
+
 /** Logical fields aligned with New Plan §2.1 offset map (names, not packed binary layout). */
 struct EngineState
 {
@@ -44,7 +93,34 @@ struct EngineState
     std::atomic<bool> analysisDirty { false };
 
     /** §3.2 — Hanning vs Gaussian Q24 window (message thread sets, audio thread reads relaxed). */
-    std::atomic<std::uint8_t> windowKindRaw { static_cast<std::uint8_t> (WindowKind::Hanning) };
+    std::atomic<std::uint8_t> windowKindRaw { static_cast<std::uint8_t> (WindowKind::Gaussian) };
+
+    /** AGC controls. */
+    std::atomic<bool> agcEnabled { true };
+    std::atomic<float> agcStrength { 1.0f };
+
+    /** Chroma fold controls. */
+    std::atomic<int> foldMaxOctaves { 0 }; // <=0 means auto (to Nyquist)
+    std::atomic<std::uint8_t> foldInterpModeRaw { static_cast<std::uint8_t> (FoldInterpMode::Linear2Bin) };
+    std::atomic<std::uint8_t> foldHarmonicWeightModeRaw { static_cast<std::uint8_t> (FoldHarmonicWeightMode::InvSqrtH) };
+
+    /** Waterfall display/render controls (shared between UI and renderers). */
+    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw { static_cast<std::uint8_t> (WaterfallDisplayCurveMode::Sqrt) };
+    std::atomic<std::uint8_t> waterfallTextureFilterModeRaw { static_cast<std::uint8_t> (WaterfallTextureFilterMode::Nearest) };
+
+    std::atomic<std::uint8_t> chromaShapingModeRaw { static_cast<std::uint8_t> (ChromaShapingMode::NoiseFloorSubtract) };
+    std::atomic<std::uint8_t> foldHarmonicModelRaw { static_cast<std::uint8_t> (FoldHarmonicModel::OctaveStack_Doc_v1) };
+    std::atomic<std::uint8_t> spectralBackendModeRaw { static_cast<std::uint8_t> (SpectralBackendMode::STFT_v1_0) };
+
+    /** Analysis decimation: run chain every N audio callbacks (1 = every buffer). */
+    std::atomic<int> analysisEveryNCallbacks { 1 };
+
+    /** High-pass cutoff Hz; values below kHighPassOffHz disable filtering. */
+    std::atomic<float> highPassCutoffHz { 0.0f };
+    static constexpr float kHighPassOffHz = 8.0f;
+
+    /** Max harmonic index K for integer-harmonic fold (k = 1 .. K). */
+    std::atomic<int> maxHarmonicK { 48 };
 
     [[nodiscard]] WindowKind windowKind() const noexcept
     {
@@ -54,6 +130,76 @@ struct EngineState
     void setWindowKind (WindowKind w) noexcept
     {
         windowKindRaw.store (static_cast<std::uint8_t> (w), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] FoldInterpMode foldInterpMode() const noexcept
+    {
+        return static_cast<FoldInterpMode> (foldInterpModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setFoldInterpMode (FoldInterpMode m) noexcept
+    {
+        foldInterpModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] FoldHarmonicWeightMode foldHarmonicWeightMode() const noexcept
+    {
+        return static_cast<FoldHarmonicWeightMode> (foldHarmonicWeightModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setFoldHarmonicWeightMode (FoldHarmonicWeightMode m) noexcept
+    {
+        foldHarmonicWeightModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] WaterfallDisplayCurveMode waterfallDisplayCurveMode() const noexcept
+    {
+        return static_cast<WaterfallDisplayCurveMode> (waterfallDisplayCurveModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setWaterfallDisplayCurveMode (WaterfallDisplayCurveMode m) noexcept
+    {
+        waterfallDisplayCurveModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] WaterfallTextureFilterMode waterfallTextureFilterMode() const noexcept
+    {
+        return static_cast<WaterfallTextureFilterMode> (waterfallTextureFilterModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setWaterfallTextureFilterMode (WaterfallTextureFilterMode m) noexcept
+    {
+        waterfallTextureFilterModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] ChromaShapingMode chromaShapingMode() const noexcept
+    {
+        return static_cast<ChromaShapingMode> (chromaShapingModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setChromaShapingMode (ChromaShapingMode m) noexcept
+    {
+        chromaShapingModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] FoldHarmonicModel foldHarmonicModel() const noexcept
+    {
+        return static_cast<FoldHarmonicModel> (foldHarmonicModelRaw.load (std::memory_order_relaxed));
+    }
+
+    void setFoldHarmonicModel (FoldHarmonicModel m) noexcept
+    {
+        foldHarmonicModelRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] SpectralBackendMode spectralBackendMode() const noexcept
+    {
+        return static_cast<SpectralBackendMode> (spectralBackendModeRaw.load (std::memory_order_relaxed));
+    }
+
+    void setSpectralBackendMode (SpectralBackendMode m) noexcept
+    {
+        spectralBackendModeRaw.store (static_cast<std::uint8_t> (m), std::memory_order_relaxed);
     }
 
     void resetAnalysisDisplay();

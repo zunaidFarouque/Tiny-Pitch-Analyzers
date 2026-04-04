@@ -4,6 +4,7 @@
 #include <juce_graphics/juce_graphics.h>
 #include <juce_opengl/juce_opengl.h>
 #include <RenderFrameData.h>
+#include <EngineState.h>
 #include "IRendererHost.h"
 #include "SharedWaterfallRing.h"
 
@@ -11,6 +12,7 @@
 #include <atomic>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace pitchlab
 {
@@ -44,6 +46,8 @@ public:
     void setWaterfallEnergyScale (float s) noexcept;
     void setWaterfallAlphaPower (float p) noexcept;
     void setWaterfallAlphaThreshold (float t) noexcept;
+    void setWaterfallDisplayCurveMode (pitchlab::WaterfallDisplayCurveMode m) noexcept;
+    void setWaterfallTextureFilterMode (pitchlab::WaterfallTextureFilterMode m) noexcept;
 
     /** Film reel dimensions (New Plan §4.3). */
     static constexpr int kFilmWidth = 1024;
@@ -53,6 +57,7 @@ public:
 
     /** Upload one chroma row from audio/DSP thread (384 floats or bytes scaled later). */
     void pushWaterfallRow (std::span<const float> row384) override;
+    void commitWaterfallGrid384 (std::span<const float> rowMajor384x384) noexcept override;
 
 private:
     void newOpenGLContextCreated() override;
@@ -96,6 +101,7 @@ private:
     std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallEnergyScaleUniform_;
     std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallAlphaPowerUniform_;
     std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallAlphaThresholdUniform_;
+    std::unique_ptr<juce::OpenGLShaderProgram::Uniform> waterfallDisplayCurveModeUniform_;
 
     GLuint lineVbo_ = 0;
     GLuint waterfallVbo_ = 0;
@@ -108,11 +114,16 @@ private:
 
     SharedWaterfallRing waterfallRing_;
     juce::CriticalSection frameLock_;
+    juce::CriticalSection waterfallBulkLock_;
+    std::vector<float> waterfallBulkPending_;
+    std::atomic<bool> waterfallBulkUploadPending_ { false };
     bool backendHealthy_ = false;
 
-    std::atomic<float> waterfallEnergyScale_ { 0.03f };
-    std::atomic<float> waterfallAlphaPower_ { 1.0f };
+    std::atomic<float> waterfallEnergyScale_ { 0.064f };
+    std::atomic<float> waterfallAlphaPower_ { 2.55f };
     std::atomic<float> waterfallAlphaThreshold_ { 0.0050f };
+    std::atomic<std::uint8_t> waterfallDisplayCurveModeRaw_ { static_cast<std::uint8_t> (pitchlab::WaterfallDisplayCurveMode::Sqrt) };
+    std::atomic<std::uint8_t> waterfallTextureFilterModeRaw_ { static_cast<std::uint8_t> (pitchlab::WaterfallTextureFilterMode::Nearest) };
 
     juce::Image axisOverlayImage_;
     bool axisOverlayDirty_ = true;

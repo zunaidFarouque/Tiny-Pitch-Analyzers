@@ -5,6 +5,8 @@
 #include "EngineState.h"
 #include "RenderFrameData.h"
 
+#include <juce_dsp/juce_dsp.h>
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -45,6 +47,13 @@ public:
     /** Thread-safe immutable render snapshot for UI/renderer threads. */
     void copyLatestRenderFrame (RenderFrameData& dst) const noexcept;
 
+    /**
+        Offline STFT hop: one analysis frame from exactly fftSize mono float samples (oldest first),
+        matching the live analysis chain for that window. Resets ingress and HP state for a clean hop.
+        Call from a non-audio thread; use a dedicated engine instance if the device callback is active on another.
+    */
+    void analyzeOfflineWindowFromMonoFloat (std::span<const float> monoFftWindow, RenderFrameData& out);
+
     [[nodiscard]] const EngineState& state() const noexcept { return state_; }
     [[nodiscard]] EngineState& state() noexcept { return state_; }
     [[nodiscard]] const StaticTables* tables() const noexcept { return tables_.get(); }
@@ -65,12 +74,17 @@ private:
     std::vector<std::int16_t> windowed_;
     std::vector<float> floatFftIn_;
     std::vector<float> magSpectrum_;
+    std::vector<float> magForFold_;
     std::array<float, 384> chromaRow_ {};
+    juce::dsp::IIR::Filter<float> highPassFilter_;
+    float lastHighPassCutHz_ = -1.0f;
+    double lastHighPassSr_ = 0.0;
+    int analysisDecimationCounter_ = 0;
     mutable std::mutex frameMutex_;
     RenderFrameData latestFrame_{};
     std::uint64_t frameSequence_ = 0;
 
-    static constexpr std::size_t kIngressCapacity = 16384;
+    static constexpr std::size_t kIngressCapacity = 65536;
 
     // Hot path readers (audio thread) take shared locks; reconfiguration takes exclusive.
     mutable std::shared_mutex configMutex_;

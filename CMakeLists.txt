@@ -22,6 +22,7 @@ add_subdirectory(JUCE)
 
 add_library(PitchLabEngine STATIC
     Source/Engine/AgcInt16.cpp
+    Source/Engine/ChromaPostProcess.cpp
     Source/Engine/ChromaFolder.cpp
     Source/Engine/ChromaMap.cpp
     Source/Engine/CircularInt16Buffer.cpp
@@ -31,6 +32,7 @@ add_library(PitchLabEngine STATIC
     Source/Engine/PitchLabChord.cpp
     Source/Engine/PitchFromSpectrum.cpp
     Source/Engine/PitchLabEngine.cpp
+    Source/Engine/SpectralMagSmear.cpp
     Source/Engine/StaticTables.cpp
     Source/Engine/WindowApplyQ24.cpp
 )
@@ -96,6 +98,8 @@ target_include_directories(TinyPitchHost PRIVATE
 target_compile_definitions(TinyPitchHost PRIVATE
     JUCE_USE_MP3AUDIOFORMAT=1
     "PITCHLAB_EXAMPLE_AUDIO_DIR=\"${CMAKE_SOURCE_DIR}/Source/App/ExampleAudio\""
+    "PITCHLAB_TEST_ASSETS_DIR=\"${CMAKE_SOURCE_DIR}/test-assets\""
+    "PITCHLAB_DEFAULT_EXAMPLE_WAV=\"${CMAKE_SOURCE_DIR}/test-assets/voice and whistle.wav\""
 )
 
 if(WIN32)

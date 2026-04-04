@@ -1,9 +1,13 @@
 #include "MainComponent.h"
 
+#include "SharedWaterfallRing.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <span>
+#include <vector>
 
 namespace
 {
@@ -39,6 +43,76 @@ bool isAllowedAudioExtension (const juce::String& extLowerNoDot)
             return VisualizationMode::Waveform;
     }
 }
+
+void collectAudioFilesFromDir (const juce::File& dir, std::vector<juce::File>& out)
+{
+    if (! dir.isDirectory())
+        return;
+
+    juce::Array<juce::File> found;
+    dir.findChildFiles (found, juce::File::findFiles, false);
+
+    for (const auto& f : found)
+    {
+        if (! f.existsAsFile())
+            continue;
+
+        auto ext = f.getFileExtension().toLowerCase().trimCharactersAtStart (".");
+        if (! isAllowedAudioExtension (ext))
+            continue;
+
+        out.push_back (f);
+    }
+}
+
+/** Mono float window [endSample-fftSize, endSample); zero-pad before file start. */
+void readMonoFloatWindow (juce::AudioFormatReader& reader,
+                          int fftSize,
+                          int64_t endSample,
+                          std::vector<float>& dst)
+{
+    dst.resize (static_cast<std::size_t> (fftSize));
+    std::fill (dst.begin(), dst.end(), 0.0f);
+
+    const int numCh = juce::jlimit (1, 64, static_cast<int> (reader.numChannels));
+    const int64_t total = reader.lengthInSamples;
+    const int64_t winStart = endSample - static_cast<int64_t> (fftSize);
+
+    int dstOffset = 0;
+    int64_t fileReadStart = winStart;
+    if (winStart < 0)
+    {
+        dstOffset = static_cast<int> (-winStart);
+        fileReadStart = 0;
+    }
+
+    const int len = fftSize - dstOffset;
+    if (len <= 0 || fileReadStart >= total)
+        return;
+
+    const int toRead = static_cast<int> (juce::jmin<int64_t> (len, total - fileReadStart));
+    if (toRead <= 0)
+        return;
+
+    std::vector<std::vector<float>> chBuf (static_cast<std::size_t> (numCh));
+    std::vector<float*> ptrs;
+    ptrs.reserve (static_cast<std::size_t> (numCh));
+    for (int c = 0; c < numCh; ++c)
+    {
+        chBuf[static_cast<std::size_t> (c)].resize (static_cast<std::size_t> (toRead));
+        ptrs.push_back (chBuf[static_cast<std::size_t> (c)].data());
+    }
+
+    reader.read (ptrs.data(), numCh, fileReadStart, toRead);
+
+    for (int i = 0; i < toRead; ++i)
+    {
+        float s = 0.0f;
+        for (int c = 0; c < numCh; ++c)
+            s += ptrs[static_cast<std::size_t> (c)][static_cast<std::size_t> (i)];
+        dst[static_cast<std::size_t> (dstOffset + i)] = s / static_cast<float> (numCh);
+    }
+}
 } // namespace
 
 MainComponent::MainComponent()
@@ -58,6 +132,20 @@ MainComponent::MainComponent()
     addAndMakeVisible (waterfallEnergyScaleLabel_);
     addAndMakeVisible (waterfallAlphaPowerLabel_);
     addAndMakeVisible (waterfallAlphaThresholdLabel_);
+    addAndMakeVisible (agcEnabledToggle_);
+    addAndMakeVisible (agcStrengthSlider_);
+    addAndMakeVisible (agcStrengthLabel_);
+    addAndMakeVisible (foldInterpCombo_);
+    addAndMakeVisible (foldWeightCombo_);
+    addAndMakeVisible (foldOctavesCombo_);
+    addAndMakeVisible (waterfallFilterCombo_);
+    addAndMakeVisible (waterfallCurveCombo_);
+    addAndMakeVisible (chromaShapingCombo_);
+    addAndMakeVisible (foldModelCombo_);
+    addAndMakeVisible (spectralBackendCombo_);
+    addAndMakeVisible (analysisRateCombo_);
+    addAndMakeVisible (highPassSlider_);
+    addAndMakeVisible (highPassLabel_);
     addAndMakeVisible (statusLabel_);
     addAndMakeVisible (engineLabel_);
     addAndMakeVisible (vizModeCombo_);
@@ -65,6 +153,19 @@ MainComponent::MainComponent()
     addAndMakeVisible (backendCombo_);
     addAndMakeVisible (audioDeviceLabel_);
     addAndMakeVisible (peakLabel_);
+    addAndMakeVisible (instantPreviewToggle_);
+    addAndMakeVisible (instantScrollBar_);
+    instantPreviewToggle_.setTooltip (
+        "Instantaneous calculation of example/audio file: Waterfall mode pre-computes only the visible time window (384 analysis columns); "
+        "use the scrollbar to move through long files.");
+    instantPreviewToggle_.onClick = [this] {
+        updateInstantPreviewChrome();
+        if (instantPreviewToggle_.getToggleState())
+            launchInstantWaterfallJob();
+    };
+    instantScrollBar_.addListener (this);
+    instantScrollBar_.setAutoHide (false);
+    instantPreviewToggle_.setToggleState (true, juce::dontSendNotification);
     addAndMakeVisible (openGlHost_);
     addAndMakeVisible (cpuHost_);
     activeRenderer_ = &openGlHost_;
@@ -80,10 +181,12 @@ MainComponent::MainComponent()
 
     windowKindCombo_.addItem ("Window: Hanning", 1);
     windowKindCombo_.addItem ("Window: Gaussian", 2);
-    windowKindCombo_.setSelectedId (1, juce::dontSendNotification);
+    windowKindCombo_.setSelectedId (2, juce::dontSendNotification);
+    engine_.state().setWindowKind (pitchlab::WindowKind::Gaussian);
     windowKindCombo_.onChange = [this] {
         const int id = windowKindCombo_.getSelectedId();
         engine_.state().setWindowKind (id == 2 ? pitchlab::WindowKind::Gaussian : pitchlab::WindowKind::Hanning);
+        bumpInstantPreviewDebounced();
     };
 
     backendCombo_.addItem ("Backend: Auto", 1);
@@ -115,7 +218,9 @@ MainComponent::MainComponent()
     fftSizeCombo_.addItem ("2048", 2048);
     fftSizeCombo_.addItem ("4096", 4096);
     fftSizeCombo_.addItem ("8192", 8192);
-    fftSizeCombo_.setSelectedId (engine_.state().fftSize, juce::dontSendNotification);
+    fftSizeCombo_.addItem ("16384", 16384);
+    fftSizeCombo_.addItem ("32768", 32768);
+    fftSizeCombo_.setSelectedId (8192, juce::dontSendNotification);
     fftSizeCombo_.onChange = [this] { fftSizeChanged(); };
 
     waterfallEnergyScaleLabel_.setText ("W-Energy", juce::dontSendNotification);
@@ -134,33 +239,207 @@ MainComponent::MainComponent()
     waterfallAlphaPowerSlider_.setRange (0.1f, 4.0f, 0.05f);
     waterfallAlphaThresholdSlider_.setRange (0.0f, 0.05f, 0.0005f);
 
-    waterfallEnergyScaleSlider_.setValue (0.03, juce::dontSendNotification);
-    waterfallAlphaPowerSlider_.setValue (1.0, juce::dontSendNotification);
+    waterfallEnergyScaleSlider_.setValue (0.064, juce::dontSendNotification);
+    waterfallAlphaPowerSlider_.setValue (2.55, juce::dontSendNotification);
     waterfallAlphaThresholdSlider_.setValue (0.0050, juce::dontSendNotification);
 
     waterfallEnergyScaleSlider_.onValueChange = [this] {
-        openGlHost_.setWaterfallEnergyScale ((float) waterfallEnergyScaleSlider_.getValue());
+        const float v = (float) waterfallEnergyScaleSlider_.getValue();
+        openGlHost_.setWaterfallEnergyScale (v);
+        cpuHost_.setWaterfallEnergyScale (v);
     };
     waterfallAlphaPowerSlider_.onValueChange = [this] {
-        openGlHost_.setWaterfallAlphaPower ((float) waterfallAlphaPowerSlider_.getValue());
+        const float v = (float) waterfallAlphaPowerSlider_.getValue();
+        openGlHost_.setWaterfallAlphaPower (v);
+        cpuHost_.setWaterfallAlphaPower (v);
     };
     waterfallAlphaThresholdSlider_.onValueChange = [this] {
-        openGlHost_.setWaterfallAlphaThreshold ((float) waterfallAlphaThresholdSlider_.getValue());
+        const float v = (float) waterfallAlphaThresholdSlider_.getValue();
+        openGlHost_.setWaterfallAlphaThreshold (v);
+        cpuHost_.setWaterfallAlphaThreshold (v);
     };
+
+    agcEnabledToggle_.setToggleState (true, juce::dontSendNotification);
+    engine_.state().agcEnabled.store (true, std::memory_order_relaxed);
+    agcEnabledToggle_.onClick = [this] {
+        engine_.state().agcEnabled.store (agcEnabledToggle_.getToggleState(), std::memory_order_relaxed);
+        bumpInstantPreviewDebounced();
+    };
+
+    agcStrengthLabel_.setText ("AGC Strength", juce::dontSendNotification);
+    agcStrengthSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    agcStrengthSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 60, 20);
+    agcStrengthSlider_.setRange (0.0, 1.0, 0.01);
+    agcStrengthSlider_.setValue (1.0, juce::dontSendNotification);
+    agcStrengthSlider_.onValueChange = [this] {
+        engine_.state().agcStrength.store ((float) agcStrengthSlider_.getValue(), std::memory_order_relaxed);
+        bumpInstantPreviewDebounced();
+    };
+
+    foldInterpCombo_.addItem ("Fold: Nearest", 1);
+    foldInterpCombo_.addItem ("Fold: Linear2", 2);
+    foldInterpCombo_.addItem ("Fold: Quadratic3", 3);
+    foldInterpCombo_.setSelectedId (2, juce::dontSendNotification);
+    foldInterpCombo_.onChange = [this] {
+        const int id = foldInterpCombo_.getSelectedId();
+        pitchlab::FoldInterpMode m = pitchlab::FoldInterpMode::Linear2Bin;
+        if (id == 1) m = pitchlab::FoldInterpMode::Nearest;
+        else if (id == 3) m = pitchlab::FoldInterpMode::Quadratic3Bin;
+        engine_.state().setFoldInterpMode (m);
+        bumpInstantPreviewDebounced();
+    };
+
+    foldWeightCombo_.addItem ("Weight: Uniform", 1);
+    foldWeightCombo_.addItem ("Weight: 1/h", 2);
+    foldWeightCombo_.addItem ("Weight: 1/sqrt(h)", 3);
+    foldWeightCombo_.setSelectedId (3, juce::dontSendNotification);
+    foldWeightCombo_.onChange = [this] {
+        const int id = foldWeightCombo_.getSelectedId();
+        pitchlab::FoldHarmonicWeightMode m = pitchlab::FoldHarmonicWeightMode::InvSqrtH;
+        if (id == 1) m = pitchlab::FoldHarmonicWeightMode::Uniform;
+        else if (id == 2) m = pitchlab::FoldHarmonicWeightMode::InvH;
+        engine_.state().setFoldHarmonicWeightMode (m);
+        bumpInstantPreviewDebounced();
+    };
+
+    foldOctavesCombo_.addItem ("Oct: Auto", 0x100);
+    foldOctavesCombo_.addItem ("Oct: 1", 1);
+    foldOctavesCombo_.addItem ("Oct: 2", 2);
+    foldOctavesCombo_.addItem ("Oct: 3", 3);
+    foldOctavesCombo_.addItem ("Oct: 4", 4);
+    foldOctavesCombo_.addItem ("Oct: 5", 5);
+    foldOctavesCombo_.addItem ("Oct: 6", 6);
+    foldOctavesCombo_.setSelectedId (0x100, juce::dontSendNotification);
+    foldOctavesCombo_.onChange = [this] {
+        const int id = foldOctavesCombo_.getSelectedId();
+        engine_.state().foldMaxOctaves.store (id == 0x100 ? 0 : id, std::memory_order_relaxed);
+        bumpInstantPreviewDebounced();
+    };
+
+    waterfallFilterCombo_.addItem ("Filter: Nearest", 1);
+    waterfallFilterCombo_.addItem ("Filter: Linear", 2);
+    waterfallFilterCombo_.setSelectedId (1, juce::dontSendNotification);
+    waterfallFilterCombo_.onChange = [this] {
+        const auto m = waterfallFilterCombo_.getSelectedId() == 2
+                           ? pitchlab::WaterfallTextureFilterMode::Linear
+                           : pitchlab::WaterfallTextureFilterMode::Nearest;
+        openGlHost_.setWaterfallTextureFilterMode (m);
+        engine_.state().setWaterfallTextureFilterMode (m);
+    };
+
+    waterfallCurveCombo_.addItem ("Curve: Linear", 1);
+    waterfallCurveCombo_.addItem ("Curve: Sqrt", 2);
+    waterfallCurveCombo_.addItem ("Curve: Log dB", 3);
+    waterfallCurveCombo_.setSelectedId (2, juce::dontSendNotification);
+    waterfallCurveCombo_.onChange = [this] {
+        pitchlab::WaterfallDisplayCurveMode m = pitchlab::WaterfallDisplayCurveMode::Sqrt;
+        if (waterfallCurveCombo_.getSelectedId() == 1) m = pitchlab::WaterfallDisplayCurveMode::Linear;
+        else if (waterfallCurveCombo_.getSelectedId() == 3) m = pitchlab::WaterfallDisplayCurveMode::LogDb;
+        openGlHost_.setWaterfallDisplayCurveMode (m);
+        cpuHost_.setWaterfallDisplayCurveMode (m);
+        engine_.state().setWaterfallDisplayCurveMode (m);
+    };
+
+    chromaShapingCombo_.addItem (pitchlab::kUiChromaShapeNone, 1);
+    chromaShapingCombo_.addItem (pitchlab::kUiChromaShapeLog, 2);
+    chromaShapingCombo_.addItem (pitchlab::kUiChromaShapeNoiseFloor, 3);
+    chromaShapingCombo_.addItem (pitchlab::kUiChromaShapePercentile, 4);
+    chromaShapingCombo_.setSelectedId (3, juce::dontSendNotification);
+    chromaShapingCombo_.onChange = [this] {
+        pitchlab::ChromaShapingMode m = pitchlab::ChromaShapingMode::None;
+        switch (chromaShapingCombo_.getSelectedId())
+        {
+            case 2: m = pitchlab::ChromaShapingMode::LogCompress; break;
+            case 3: m = pitchlab::ChromaShapingMode::NoiseFloorSubtract; break;
+            case 4: m = pitchlab::ChromaShapingMode::PercentileGate; break;
+            default: break;
+        }
+        engine_.state().setChromaShapingMode (m);
+        bumpInstantPreviewDebounced();
+    };
+
+    foldModelCombo_.addItem (pitchlab::kUiFoldOctaveStack, 1);
+    foldModelCombo_.addItem (pitchlab::kUiFoldIntegerHarmonics, 2);
+    foldModelCombo_.setSelectedId (1, juce::dontSendNotification);
+    foldModelCombo_.onChange = [this] {
+        engine_.state().setFoldHarmonicModel (foldModelCombo_.getSelectedId() == 2
+                                                   ? pitchlab::FoldHarmonicModel::IntegerHarmonics_v0_2
+                                                   : pitchlab::FoldHarmonicModel::OctaveStack_Doc_v1);
+        bumpInstantPreviewDebounced();
+    };
+
+    spectralBackendCombo_.addItem (pitchlab::kUiSpectrumStft, 1);
+    spectralBackendCombo_.addItem (pitchlab::kUiSpectrumConstQApprox, 2);
+    spectralBackendCombo_.addItem (pitchlab::kUiSpectrumVarQApprox, 3);
+    spectralBackendCombo_.setSelectedId (1, juce::dontSendNotification);
+    spectralBackendCombo_.onChange = [this] {
+        pitchlab::SpectralBackendMode m = pitchlab::SpectralBackendMode::STFT_v1_0;
+        if (spectralBackendCombo_.getSelectedId() == 2) m = pitchlab::SpectralBackendMode::ConstQApprox_v0_1;
+        else if (spectralBackendCombo_.getSelectedId() == 3) m = pitchlab::SpectralBackendMode::VariableQApprox_v0_1;
+        engine_.state().setSpectralBackendMode (m);
+        bumpInstantPreviewDebounced();
+    };
+
+    analysisRateCombo_.addItem ("Rate: each callback", 1);
+    analysisRateCombo_.addItem ("Rate: 1/2", 2);
+    analysisRateCombo_.addItem ("Rate: 1/4", 3);
+    analysisRateCombo_.addItem ("Rate: 1/8", 4);
+    analysisRateCombo_.setSelectedId (1, juce::dontSendNotification);
+    analysisRateCombo_.onChange = [this] {
+        const int id = analysisRateCombo_.getSelectedId();
+        const int every = 1 << juce::jlimit (0, 3, id - 1);
+        engine_.state().analysisEveryNCallbacks.store (every, std::memory_order_relaxed);
+        updateInstantPreviewChrome();
+        bumpInstantPreviewDebounced();
+    };
+
+    highPassLabel_.setText ("HP (Hz)", juce::dontSendNotification);
+    highPassSlider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    highPassSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+    highPassSlider_.setRange (0.0, 4000.0, 1.0);
+    highPassSlider_.setSkewFactorFromMidPoint (200.0);
+    highPassSlider_.textFromValueFunction = [] (double v) {
+        return v < static_cast<double> (pitchlab::EngineState::kHighPassOffHz) ? juce::String ("Off")
+                                                                                 : juce::String (v, 0) + " Hz";
+    };
+    highPassSlider_.setValue (0.0, juce::dontSendNotification);
+    highPassSlider_.onValueChange = [this] {
+        engine_.state().highPassCutoffHz.store (static_cast<float> (highPassSlider_.getValue()),
+                                                std::memory_order_relaxed);
+        bumpInstantPreviewDebounced();
+    };
+
+    // Apply defaults once.
+    waterfallEnergyScaleSlider_.onValueChange();
+    waterfallAlphaPowerSlider_.onValueChange();
+    waterfallAlphaThresholdSlider_.onValueChange();
+    waterfallFilterCombo_.onChange();
+    waterfallCurveCombo_.onChange();
+    chromaShapingCombo_.onChange();
+    foldModelCombo_.onChange();
+    spectralBackendCombo_.onChange();
+    analysisRateCombo_.onChange();
+    highPassSlider_.onValueChange();
 
     statusLabel_.setJustificationType (juce::Justification::centredLeft);
     engineLabel_.setJustificationType (juce::Justification::centredLeft);
     engineLabel_.setFont (juce::FontOptions { 13.0f });
 
-    setSize (800, 600);
+    setSize (800, 680);
     startTimerHz (30);
     setAudioChannels (2, 2);
 
     refreshExampleAudioList();
+
+    const juce::File defaultWav (PITCHLAB_DEFAULT_EXAMPLE_WAV);
+    if (defaultWav.existsAsFile())
+        loadAudioFile (defaultWav);
 }
 
 MainComponent::~MainComponent()
 {
+    instantScrollBar_.removeListener (this);
+    ++instantJobGeneration_;
     stopTimer();
     shutdownAudio();
 }
@@ -170,12 +449,20 @@ void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRat
     sampleRate_ = sampleRate;
     samplesPerBlockExpected_ = samplesPerBlockExpected;
     engine_.prepareToPlay (sampleRate, samplesPerBlockExpected);
+    {
+        const juce::ScopedLock sl (offlineMutex_);
+        const int maxBlock = juce::jmax (samplesPerBlockExpected, engine_.state().fftSize);
+        offlineEngine_.prepareToPlay (sampleRate, maxBlock);
+    }
     openGlHost_.setStaticTablesPtr (engine_.tables());
     cpuHost_.setStaticTablesPtr (engine_.tables());
     syncRendererBackend();
 
     const juce::ScopedLock sl (transportLock_);
     transport_.prepareToPlay (samplesPerBlockExpected, sampleRate);
+    updateInstantPreviewChrome();
+    if (instantPreviewToggle_.getToggleState())
+        launchInstantWaterfallJob();
 }
 
 void MainComponent::releaseResources()
@@ -237,7 +524,13 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& buffe
     pitchlab::RenderFrameData frame;
     engine_.copyLatestRenderFrame (frame);
     activeRenderer_->setRenderFrame (frame);
-    activeRenderer_->pushWaterfallRow (std::span<const float> { frame.chromaRow.data(), frame.chromaRow.size() });
+
+    const bool suppressWaterfall = instantPreviewToggle_.getToggleState()
+                                 && inputMode_ == InputMode::FilePlayback && currentReader_ != nullptr
+                                 && mapComboIdToMode (vizModeCombo_.getSelectedId()) == VisualizationMode::Waterfall;
+
+    if (! suppressWaterfall)
+        activeRenderer_->pushWaterfallRow (std::span<const float> { frame.chromaRow.data(), frame.chromaRow.size() });
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -269,12 +562,42 @@ void MainComponent::resized()
     row2.removeFromLeft (8);
     peakLabel_.setBounds (row2.removeFromRight (100).reduced (0, 2));
     row2.removeFromRight (8);
+    instantPreviewToggle_.setBounds (row2.removeFromRight (200).reduced (0, 2));
+    row2.removeFromRight (8);
     audioDeviceLabel_.setBounds (row2.reduced (0, 2));
     r.removeFromTop (6);
 
     auto fftRow = r.removeFromTop (22);
     fftSizeLabel_.setBounds (fftRow.removeFromLeft (90).reduced (0, 2));
-    fftSizeCombo_.setBounds (fftRow.reduced (0, 2));
+    fftSizeCombo_.setBounds (fftRow.removeFromLeft (120).reduced (0, 2));
+    fftRow.removeFromLeft (8);
+    agcEnabledToggle_.setBounds (fftRow.removeFromLeft (65).reduced (0, 2));
+    fftRow.removeFromLeft (8);
+    agcStrengthLabel_.setBounds (fftRow.removeFromLeft (90).reduced (0, 2));
+    agcStrengthSlider_.setBounds (fftRow.removeFromLeft (fftRow.getWidth() / 2).reduced (0, 2));
+
+    r.removeFromTop (4);
+    auto hpRow = r.removeFromTop (24);
+    highPassLabel_.setBounds (hpRow.removeFromLeft (56).reduced (0, 2));
+    highPassSlider_.setBounds (hpRow.removeFromLeft (hpRow.getWidth() / 2).reduced (0, 2));
+    hpRow.removeFromLeft (6);
+    analysisRateCombo_.setBounds (hpRow.reduced (0, 2));
+
+    r.removeFromTop (4);
+    auto modelRow = r.removeFromTop (24);
+    const int mw = modelRow.getWidth() / 3;
+    foldModelCombo_.setBounds (modelRow.removeFromLeft (mw).reduced (0, 2));
+    spectralBackendCombo_.setBounds (modelRow.removeFromLeft (mw).reduced (0, 2));
+    chromaShapingCombo_.setBounds (modelRow.reduced (0, 2));
+
+    r.removeFromTop (4);
+    auto optRow = r.removeFromTop (24);
+    const int optW = optRow.getWidth() / 5;
+    foldInterpCombo_.setBounds (optRow.removeFromLeft (optW).reduced (0, 2));
+    foldWeightCombo_.setBounds (optRow.removeFromLeft (optW).reduced (0, 2));
+    foldOctavesCombo_.setBounds (optRow.removeFromLeft (optW).reduced (0, 2));
+    waterfallFilterCombo_.setBounds (optRow.removeFromLeft (optW).reduced (0, 2));
+    waterfallCurveCombo_.setBounds (optRow.reduced (0, 2));
 
     auto ctrlRow = r.removeFromTop (56);
     const int segW = ctrlRow.getWidth() / 3;
@@ -297,6 +620,31 @@ void MainComponent::resized()
     statusLabel_.setBounds (r.removeFromTop (24));
     engineLabel_.setBounds (r.removeFromTop (22));
 
+    const bool showInstantScroll = instantPreviewToggle_.getToggleState() && inputMode_ == InputMode::FilePlayback
+                                   && currentReader_ != nullptr && sampleRate_ > 0.0 && samplesPerBlockExpected_ > 0;
+    int scrollH = 0;
+    if (showInstantScroll)
+    {
+        const int hop = samplesPerBlockExpected_
+                        * juce::jmax (1, engine_.state().analysisEveryNCallbacks.load (std::memory_order_relaxed));
+        const double visibleSec = static_cast<double> (SharedWaterfallRing::kRows * hop) / sampleRate_;
+        const double dur = static_cast<double> (currentReader_->lengthInSamples)
+                           / juce::jmax (1.0e-6, currentReader_->sampleRate);
+        if (dur > visibleSec + 1.0e-6)
+            scrollH = 18;
+    }
+
+    if (scrollH > 0)
+    {
+        instantScrollBar_.setVisible (true);
+        instantScrollBar_.setBounds (r.removeFromBottom (scrollH).reduced (24, 2));
+        r.removeFromBottom (4);
+    }
+    else
+    {
+        instantScrollBar_.setVisible (false);
+    }
+
     openGlHost_.setBounds (r);
     cpuHost_.setBounds (r);
 }
@@ -306,6 +654,7 @@ void MainComponent::timerCallback()
     syncRendererBackend();
     updatePositionFromTransport();
     updateDeviceAndPeakLabels();
+    updateInstantPreviewChrome();
 
     engineLabel_.setText ("Engine " + juce::String (pitchlab::engineVersionString())
                               + (engine_.state().analysisDirty.load() ? "  (analysis dirty)" : ""),
@@ -338,6 +687,7 @@ void MainComponent::visualizationModeChanged()
     openGlHost_.setMode (m);
     cpuHost_.setMode (m);
     activeRenderer_->setMode (m);
+    bumpInstantPreviewDebounced();
 }
 
 void MainComponent::renderBackendPolicyChanged()
@@ -368,6 +718,7 @@ void MainComponent::syncRendererBackend()
     activeRenderer_ = next;
     openGlHost_.setVisible (activeRenderer_ == &openGlHost_);
     cpuHost_.setVisible (activeRenderer_ == &cpuHost_);
+    bumpInstantPreviewDebounced();
 }
 
 void MainComponent::openFileClicked()
@@ -427,6 +778,12 @@ void MainComponent::loadAudioFile (const juce::File& file)
     positionSlider_.setValue (0.0, juce::dontSendNotification);
 
     statusLabel_.setText (file.getFileName(), juce::dontSendNotification);
+
+    currentAudioFileForInstant_ = file;
+    instantScrollStartSec_.store (0.0, std::memory_order_relaxed);
+    updateInstantPreviewChrome();
+    if (instantPreviewToggle_.getToggleState())
+        launchInstantWaterfallJob();
 }
 
 void MainComponent::refreshExampleAudioList()
@@ -435,31 +792,19 @@ void MainComponent::refreshExampleAudioList()
     exampleAudioFiles_.clear();
     exampleCombo_.addItem ("Example clips...", 1);
 
-    const juce::File dir (PITCHLAB_EXAMPLE_AUDIO_DIR);
-    if (! dir.isDirectory())
-    {
-        exampleCombo_.setSelectedId (1, juce::dontSendNotification);
-        return;
-    }
-
-    juce::Array<juce::File> found;
-    dir.findChildFiles (found, juce::File::findFiles, false);
-
     std::vector<juce::File> filtered;
-    filtered.reserve (static_cast<std::size_t> (found.size()));
+    collectAudioFilesFromDir (juce::File (PITCHLAB_EXAMPLE_AUDIO_DIR), filtered);
+    collectAudioFilesFromDir (juce::File (PITCHLAB_TEST_ASSETS_DIR), filtered);
 
-    for (const auto& f : found)
-    {
-        if (! f.existsAsFile())
-            continue;
-
-        auto ext = f.getFileExtension().toLowerCase().trimCharactersAtStart (".");
-        if (! isAllowedAudioExtension (ext))
-            continue;
-
-        filtered.push_back (f);
-    }
-
+    std::sort (filtered.begin(), filtered.end(), [] (const juce::File& a, const juce::File& b) {
+        return a.getFullPathName().compareIgnoreCase (b.getFullPathName()) < 0;
+    });
+    filtered.erase (std::unique (filtered.begin(),
+                                 filtered.end(),
+                                 [] (const juce::File& a, const juce::File& b) {
+                                     return a.getFullPathName().equalsIgnoreCase (b.getFullPathName());
+                                 }),
+                    filtered.end());
     std::sort (filtered.begin(), filtered.end(), [] (const juce::File& a, const juce::File& b) {
         return a.getFileName().compareNatural (b.getFileName()) < 0;
     });
@@ -471,7 +816,21 @@ void MainComponent::refreshExampleAudioList()
         exampleCombo_.addItem (f.getFileName(), nextId++);
     }
 
-    exampleCombo_.setSelectedId (1, juce::dontSendNotification);
+    const juce::File defaultWav (PITCHLAB_DEFAULT_EXAMPLE_WAV);
+    int selectId = 1;
+    if (defaultWav.existsAsFile())
+    {
+        for (int i = 0; i < static_cast<int> (exampleAudioFiles_.size()); ++i)
+        {
+            if (exampleAudioFiles_[static_cast<std::size_t> (i)].getFullPathName().equalsIgnoreCase (defaultWav.getFullPathName()))
+            {
+                selectId = i + 2;
+                break;
+            }
+        }
+    }
+
+    exampleCombo_.setSelectedId (selectId, juce::dontSendNotification);
 }
 
 void MainComponent::exampleComboChanged()
@@ -525,6 +884,10 @@ void MainComponent::toggleInputClicked()
 
         inputMode_ = InputMode::FilePlayback;
         inputToggleButton_.setButtonText ("Input: File");
+        updateInstantPreviewChrome();
+        resized();
+        if (instantPreviewToggle_.getToggleState())
+            launchInstantWaterfallJob();
     }
     else
     {
@@ -535,6 +898,8 @@ void MainComponent::toggleInputClicked()
         inputMode_ = InputMode::LiveMicrophone;
         inputToggleButton_.setButtonText ("Input: Mic");
         playPauseButton_.setButtonText ("Play");
+        updateInstantPreviewChrome();
+        resized();
     }
 }
 
@@ -556,12 +921,18 @@ void MainComponent::fftSizeChanged()
         return;
 
     engine_.reconfigureFftSize (newFft, sampleRate_, samplesPerBlockExpected_);
+    {
+        const juce::ScopedLock sl (offlineMutex_);
+        offlineEngine_.reconfigureFftSize (newFft, sampleRate_, juce::jmax (samplesPerBlockExpected_, newFft));
+    }
 
     // Update visualizers with the rebuilt tables.
     openGlHost_.setStaticTablesPtr (engine_.tables());
     cpuHost_.setStaticTablesPtr (engine_.tables());
     if (activeRenderer_ != nullptr)
         activeRenderer_->setStaticTablesPtr (engine_.tables());
+    updateInstantPreviewChrome();
+    bumpInstantPreviewDebounced();
 }
 
 void MainComponent::updatePositionFromTransport()
@@ -572,4 +943,171 @@ void MainComponent::updatePositionFromTransport()
     const juce::ScopedLock sl (transportLock_);
     if (transport_.isPlaying())
         positionSlider_.setValue (transport_.getCurrentPosition(), juce::dontSendNotification);
+}
+
+void MainComponent::scrollBarMoved (juce::ScrollBar* bar, double newRangeStart)
+{
+    if (bar != &instantScrollBar_)
+        return;
+
+    instantScrollStartSec_.store (newRangeStart, std::memory_order_relaxed);
+    bumpInstantPreviewDebounced();
+}
+
+void MainComponent::syncOfflineEngineFromLive (double analysisSampleRate)
+{
+    const auto& L = engine_.state();
+    auto& O = offlineEngine_.state();
+    const double sr = analysisSampleRate > 0.0 ? analysisSampleRate : sampleRate_;
+    const int maxBlock = juce::jmax (samplesPerBlockExpected_, L.fftSize);
+    offlineEngine_.reconfigureFftSize (L.fftSize, sr, maxBlock);
+    O.audioBufferSize = samplesPerBlockExpected_;
+    O.sampleRate = sr;
+
+    O.agcEnabled.store (L.agcEnabled.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.agcStrength.store (L.agcStrength.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.setWindowKind (L.windowKind());
+    O.setFoldInterpMode (L.foldInterpMode());
+    O.setFoldHarmonicWeightMode (L.foldHarmonicWeightMode());
+    O.foldMaxOctaves.store (L.foldMaxOctaves.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.setWaterfallDisplayCurveMode (L.waterfallDisplayCurveMode());
+    O.setWaterfallTextureFilterMode (L.waterfallTextureFilterMode());
+    O.setChromaShapingMode (L.chromaShapingMode());
+    O.setFoldHarmonicModel (L.foldHarmonicModel());
+    O.setSpectralBackendMode (L.spectralBackendMode());
+    O.analysisEveryNCallbacks.store (L.analysisEveryNCallbacks.load (std::memory_order_relaxed),
+                                    std::memory_order_relaxed);
+    O.highPassCutoffHz.store (L.highPassCutoffHz.load (std::memory_order_relaxed), std::memory_order_relaxed);
+    O.maxHarmonicK.store (L.maxHarmonicK.load (std::memory_order_relaxed), std::memory_order_relaxed);
+}
+
+void MainComponent::bumpInstantPreviewDebounced()
+{
+    if (! instantPreviewToggle_.getToggleState()
+        || inputMode_ != InputMode::FilePlayback
+        || currentReader_ == nullptr
+        || mapComboIdToMode (vizModeCombo_.getSelectedId()) != VisualizationMode::Waterfall
+        || sampleRate_ <= 0.0
+        || samplesPerBlockExpected_ <= 0)
+        return;
+
+    instantDebounce_.startTimer (90);
+}
+
+void MainComponent::updateInstantPreviewChrome()
+{
+    const bool showBar = instantPreviewToggle_.getToggleState() && inputMode_ == InputMode::FilePlayback
+                         && currentReader_ != nullptr
+                         && mapComboIdToMode (vizModeCombo_.getSelectedId()) == VisualizationMode::Waterfall
+                         && sampleRate_ > 0.0 && samplesPerBlockExpected_ > 0;
+
+    if (! showBar)
+    {
+        if (instantScrollShownLast_)
+        {
+            instantScrollShownLast_ = false;
+            resized();
+        }
+        return;
+    }
+
+    const int hop = samplesPerBlockExpected_
+                    * juce::jmax (1, engine_.state().analysisEveryNCallbacks.load (std::memory_order_relaxed));
+    const double visibleSec = static_cast<double> (SharedWaterfallRing::kRows * hop) / sampleRate_;
+    const double dur = static_cast<double> (currentReader_->lengthInSamples)
+                       / juce::jmax (1.0e-9, currentReader_->sampleRate);
+    const bool needScroll = dur > visibleSec + 1.0e-9;
+
+    if (needScroll != instantScrollShownLast_)
+    {
+        instantScrollShownLast_ = needScroll;
+        resized();
+    }
+
+    if (! needScroll)
+        return;
+
+    const double maxStart = juce::jmax (0.0, dur - visibleSec);
+    double start = instantScrollStartSec_.load (std::memory_order_relaxed);
+    start = juce::jlimit (0.0, maxStart, start);
+    instantScrollStartSec_.store (start, std::memory_order_relaxed);
+
+    instantScrollBar_.setRangeLimits (0.0, dur, juce::dontSendNotification);
+    instantScrollBar_.setCurrentRange (start, visibleSec, juce::dontSendNotification);
+}
+
+void MainComponent::launchInstantWaterfallJob()
+{
+    if (! instantPreviewToggle_.getToggleState()
+        || inputMode_ != InputMode::FilePlayback
+        || mapComboIdToMode (vizModeCombo_.getSelectedId()) != VisualizationMode::Waterfall
+        || ! currentAudioFileForInstant_.existsAsFile()
+        || sampleRate_ <= 0.0
+        || samplesPerBlockExpected_ <= 0)
+        return;
+
+    ++instantJobGeneration_;
+    const std::uint64_t gen = instantJobGeneration_.load (std::memory_order_relaxed);
+    const juce::File file = currentAudioFileForInstant_;
+    const double scrollStartSec = instantScrollStartSec_.load (std::memory_order_relaxed);
+    const int hopDevice = samplesPerBlockExpected_
+                          * juce::jmax (1, engine_.state().analysisEveryNCallbacks.load (std::memory_order_relaxed));
+    const double deviceSr = sampleRate_;
+    const int fftSnap = engine_.state().fftSize;
+
+    juce::Thread::launch ([this, gen, file, scrollStartSec, hopDevice, deviceSr, fftSnap] {
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
+        if (reader == nullptr)
+            return;
+
+        constexpr int kCols = SharedWaterfallRing::kRows;
+        constexpr int kBins = SharedWaterfallRing::kRowBins;
+        std::vector<float> grid (static_cast<std::size_t> (kCols * kBins), 0.0f);
+
+        const double srFile = reader->sampleRate;
+        const int hopFile = juce::jmax (1, (int) std::llround ((double) hopDevice * srFile / deviceSr));
+
+        {
+            const juce::ScopedLock sl (offlineMutex_);
+            if (gen != instantJobGeneration_.load (std::memory_order_relaxed))
+                return;
+
+            syncOfflineEngineFromLive (srFile);
+            offlineEngine_.reconfigureFftSize (fftSnap, srFile, juce::jmax (hopFile, fftSnap));
+            offlineEngine_.state().audioBufferSize = hopFile;
+
+            const std::int64_t len = reader->lengthInSamples;
+            const std::int64_t w0 = (std::int64_t) std::llround (scrollStartSec * srFile);
+
+            std::vector<float> win;
+            pitchlab::RenderFrameData frame;
+
+            for (int col = 0; col < kCols; ++col)
+            {
+                if (gen != instantJobGeneration_.load (std::memory_order_relaxed))
+                    return;
+
+                const std::int64_t endSample = w0 + static_cast<std::int64_t> (col + 1) * static_cast<std::int64_t> (hopFile);
+                if (endSample <= 0 || len <= 0)
+                    continue;
+
+                readMonoFloatWindow (*reader, fftSnap, endSample, win);
+                offlineEngine_.analyzeOfflineWindowFromMonoFloat (std::span<const float> { win.data(), win.size() }, frame);
+                std::copy (frame.chromaRow.begin(),
+                           frame.chromaRow.end(),
+                           grid.begin() + static_cast<std::size_t> (col) * static_cast<std::size_t> (kBins));
+            }
+        }
+
+        if (gen != instantJobGeneration_.load (std::memory_order_relaxed))
+            return;
+
+        juce::MessageManager::callAsync ([this, gen, grid = std::move (grid)]() mutable {
+            if (gen != instantJobGeneration_.load (std::memory_order_relaxed))
+                return;
+            activeRenderer_->commitWaterfallGrid384 (std::span<const float> { grid.data(), grid.size() });
+        });
+    });
 }

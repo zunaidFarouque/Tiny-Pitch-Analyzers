@@ -13,9 +13,9 @@
         "*.h": "cpp",
         "*.cpp": "cpp"
     },
-    "cmake.generator": "Visual Studio 18 2026",
+    "cmake.generator": "Visual Studio 17 2022",
     "cmake.preferredGenerators": [
-        "Visual Studio 18 2026",
-        "Visual Studio 17 2022"
+        "Visual Studio 17 2022",
+        "Visual Studio 18 2026"
     ]
 }
