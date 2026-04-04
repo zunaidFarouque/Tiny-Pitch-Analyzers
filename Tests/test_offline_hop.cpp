@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -34,9 +35,11 @@ TEST (PitchLabEngine, OfflineWindowFillsChromaWhenMultiResBackendSelected)
     constexpr int fft = 1024;
     eng.state().fftSize = fft;
     eng.state().setSpectralBackendMode (pitchlab::SpectralBackendMode::MultiResSTFT_v1_0);
-    eng.prepareToPlay (48000.0, fft);
+    const int need = eng.offlineMonoInputSampleCount();
+    ASSERT_GT (need, fft);
+    eng.prepareToPlay (48000.0, std::max (fft, need));
 
-    std::vector<float> win (static_cast<std::size_t> (fft), 0.2f);
+    std::vector<float> win (static_cast<std::size_t> (need), 0.2f);
     pitchlab::RenderFrameData out {};
     eng.analyzeOfflineWindowFromMonoFloat (std::span<const float> { win.data(), win.size() }, out);
 

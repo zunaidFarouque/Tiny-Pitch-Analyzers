@@ -49,11 +49,13 @@ public:
     void copyLatestRenderFrame (RenderFrameData& dst) const noexcept;
 
     /**
-        Offline STFT hop: one analysis frame from exactly fftSize mono float samples (oldest first),
-        matching the live analysis chain for that window. Resets ingress and HP state for a clean hop.
-        Call from a non-audio thread; use a dedicated engine instance if the device callback is active on another.
+        Offline analysis hop aligned to the live chain. STFT / Const-Q: pass exactly fftSize mono floats
+        (oldest first), same as readMonoFloatWindow. Multi-res STFT: pass offlineMonoInputSampleCount()
+        samples ending at the same time as the HF frame (warmup + 4xLF history + HF window; zero-pad early file).
     */
-    void analyzeOfflineWindowFromMonoFloat (std::span<const float> monoFftWindow, RenderFrameData& out);
+    void analyzeOfflineWindowFromMonoFloat (std::span<const float> monoNativeSamples, RenderFrameData& out);
+
+    [[nodiscard]] int offlineMonoInputSampleCount() const noexcept;
 
     [[nodiscard]] const EngineState& state() const noexcept { return state_; }
     [[nodiscard]] EngineState& state() noexcept { return state_; }
@@ -93,6 +95,7 @@ private:
     void runAnalysisChain() noexcept;
     void prepareToPlayImpl (double sampleRate, int maxBlockSamples);
 
+    /** LF chain FFT size for multi-res: min(HF size, 4096); 4x decimation already boosts LF resolution. */
     [[nodiscard]] int lfFftSizeForPrepare (int hfFftSize) const noexcept;
 
     EngineState state_;

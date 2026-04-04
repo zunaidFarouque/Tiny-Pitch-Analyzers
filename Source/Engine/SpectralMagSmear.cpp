@@ -22,6 +22,8 @@ void buildMagForFold (std::span<const float> magIn,
         || backend == SpectralBackendMode::MultiResSTFT_v1_0)
     {
         std::copy (magIn.begin(), magIn.end(), magOut.begin());
+        if (magOut.size() > magIn.size())
+            std::fill (magOut.begin() + static_cast<std::ptrdiff_t> (magIn.size()), magOut.end(), 0.0f);
         return;
     }
 

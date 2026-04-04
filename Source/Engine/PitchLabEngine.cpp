@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <span>
+#include <vector>
 
 namespace pitchlab
 {
@@ -132,14 +133,19 @@ int PitchLabEngine::lfFftSizeForPrepare (int hfFftSize) const noexcept
     if (hfFftSize <= 0)
         return 0;
 
-    const auto tw = static_cast<long long> (hfFftSize) * 2LL;
-    if (tw > 1048576LL)
-        return hfFftSize;
+    return std::min (hfFftSize, 4096);
+}
 
-    if (fftOrderForSize (static_cast<int> (tw)) > 0)
-        return static_cast<int> (tw);
-
-    return hfFftSize;
+int PitchLabEngine::offlineMonoInputSampleCount() const noexcept
+{
+    const int hfN = state_.fftSize;
+    if (hfN <= 0)
+        return 0;
+    if (state_.spectralBackendMode() != SpectralBackendMode::MultiResSTFT_v1_0)
+        return hfN;
+    const int lfN = lfFftSizeForPrepare (hfN);
+    constexpr int kWarmup = 1024;
+    return hfN + 4 * lfN + kWarmup;
 }
 
 void PitchLabEngine::prepareToPlay (double sampleRate, int maxBlockSamples)
@@ -157,6 +163,8 @@ void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
 
     const int hfN = state_.fftSize;
     const int lfN = lfFftSizeForPrepare (hfN);
+    const bool multiRes = (state_.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0);
+    const int virtualN = multiRes ? (hfN * 4) : hfN;
 
     hfChain_.prepare (hfN, sampleRate, maxBlockSamples);
     lfChain_.prepare (lfN, sampleRate / 4.0, std::max (1, maxBlockSamples / 4 + 1));
@@ -170,12 +178,12 @@ void PitchLabEngine::prepareToPlayImpl (double sampleRate, int maxBlockSamples)
     decimatorInt16Scratch_.resize (std::max (std::size_t { 1 }, decOutCap));
 
     if (hfN > 0 && fftOrderForSize (hfN) > 0)
-        magForFold_.assign (static_cast<std::size_t> (hfN / 2 + 1), 0.0f);
+        magForFold_.assign (static_cast<std::size_t> (virtualN / 2 + 1), 0.0f);
     else
         magForFold_.clear();
 
     chromaRow_.fill (0.0f);
-    chromaMap_.rebuild (sampleRate, hfN);
+    chromaMap_.rebuild (sampleRate, virtualN);
 
     juce::dsp::ProcessSpec hpSpec;
     hpSpec.sampleRate = sampleRate;
@@ -246,6 +254,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
 
     const int hfN = hfChain_.fftSize_;
     const SpectralBackendMode backend = state_.spectralBackendMode();
+    const int virtualN = (backend == SpectralBackendMode::MultiResSTFT_v1_0) ? (hfN * 4) : hfN;
 
     if (backend == SpectralBackendMode::MultiResSTFT_v1_0)
     {
@@ -270,6 +279,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
                                   state_.sampleRate / 4.0,
                                   hfN,
                                   lfChain_.fftSize_,
+                                  virtualN,
                                   crossoverHz,
                                   lfGain,
                                   std::span<float> { magForFold_.data(), magForFold_.size() });
@@ -293,7 +303,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
     foldSettings.maxHarmonicK = state_.maxHarmonicK.load (std::memory_order_relaxed);
     foldToChroma384 (chromaMap_,
                      state_.sampleRate,
-                     hfN,
+                     virtualN,
                      std::span<const float> { magForFold_.data(), magForFold_.size() },
                      std::span<float> { chromaRow_.data(), chromaRow_.size() },
                      std::span<std::uint8_t> { state_.octaveHarmonicIndex.data(), state_.octaveHarmonicIndex.size() },
@@ -303,7 +313,7 @@ void PitchLabEngine::runAnalysisChain() noexcept
                            std::span<float> { chromaRow_.data(), chromaRow_.size() });
 
     const float peakBin = refinedPeakBin (std::span<const float> { magForFold_.data(), magForFold_.size() });
-    state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, hfN);
+    state_.currentHz = binToHz (static_cast<double> (peakBin), state_.sampleRate, virtualN);
     state_.tuningError = centsVsTempered (state_.currentHz);
 
     fillChordProbabilitiesFromChroma384 (std::span<const float> { chromaRow_.data(), chromaRow_.size() },
@@ -389,40 +399,22 @@ void PitchLabEngine::copyLatestRenderFrame (RenderFrameData& dst) const noexcept
     dst = latestFrame_;
 }
 
-void PitchLabEngine::analyzeOfflineWindowFromMonoFloat (std::span<const float> monoFftWindow, RenderFrameData& out)
+void PitchLabEngine::analyzeOfflineWindowFromMonoFloat (std::span<const float> monoNativeSamples, RenderFrameData& out)
 {
     std::unique_lock lk (configMutex_);
 
-    /** Instant waterfall passes one HF-sized column; LF multi-res needs longer decimated history than
-        that window provides. Temporarily use single-path STFT on this offline engine only. */
-    struct ScopedOfflineStftIfMultiRes final
-    {
-        EngineState& st;
-        bool restore = false;
-        explicit ScopedOfflineStftIfMultiRes (EngineState& s) : st (s)
-        {
-            if (s.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0)
-            {
-                s.setSpectralBackendMode (SpectralBackendMode::STFT_v1_0);
-                restore = true;
-            }
-        }
-        ~ScopedOfflineStftIfMultiRes()
-        {
-            if (restore)
-                st.setSpectralBackendMode (SpectralBackendMode::MultiResSTFT_v1_0);
-        }
-        ScopedOfflineStftIfMultiRes (const ScopedOfflineStftIfMultiRes&) = delete;
-        ScopedOfflineStftIfMultiRes& operator= (const ScopedOfflineStftIfMultiRes&) = delete;
-    } scopeOfflineStft (state_);
+    const int hfN = state_.fftSize;
+    if (hfN <= 0 || hfChain_.fft_ == nullptr || hfChain_.tables_ == nullptr)
+        return;
 
-    const int n = state_.fftSize;
-    if (static_cast<int> (monoFftWindow.size()) != n || hfChain_.fft_ == nullptr || hfChain_.tables_ == nullptr
-        || static_cast<int> (conversionScratch_.size()) < n)
+    const bool multiRes = (state_.spectralBackendMode() == SpectralBackendMode::MultiResSTFT_v1_0);
+    const int expected = offlineMonoInputSampleCount();
+    if (static_cast<int> (monoNativeSamples.size()) != expected)
         return;
 
     hfChain_.ingress_.reset();
     lfChain_.ingress_.reset();
+    decimator_.reset();
     analysisDecimationCounter_ = 0;
     lfAnalysisDecimationCounter_ = 0;
     state_.strobePhase = 0.0f;
@@ -433,9 +425,59 @@ void PitchLabEngine::analyzeOfflineWindowFromMonoFloat (std::span<const float> m
     lastLfHighPassCutHz_ = -1.0f;
     lastLfHighPassSr_ = 0.0;
 
-    convertFloatToInt16Ingress (monoFftWindow,
-                                std::span<std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
-    hfChain_.ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+    if (! multiRes)
+    {
+        if (static_cast<int> (conversionScratch_.size()) < hfN)
+            return;
+
+        convertFloatToInt16Ingress (monoNativeSamples,
+                                    std::span<std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (hfN) });
+        hfChain_.ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (hfN) });
+        runAnalysisChain();
+        copyLatestRenderFrame (out);
+        return;
+    }
+
+    if (lfChain_.fft_ == nullptr || lfChain_.tables_ == nullptr)
+        return;
+
+    if (decimatorFloatScratch_.empty() || decimatorFloatOutScratch_.empty() || decimatorInt16Scratch_.empty())
+        return;
+
+    const int chunkCap = static_cast<int> (
+        std::min (std::size_t { 2048 },
+                  std::min (conversionScratch_.size(), decimatorFloatScratch_.size())));
+    if (chunkCap < 1)
+        return;
+
+    const int total = static_cast<int> (monoNativeSamples.size());
+    for (int off = 0; off < total; off += chunkCap)
+    {
+        const int n = std::min (chunkCap, total - off);
+        const std::span<const float> chunk { monoNativeSamples.data() + static_cast<std::size_t> (off),
+                                             static_cast<std::size_t> (n) };
+        convertFloatToInt16Ingress (chunk,
+                                    std::span<std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+        hfChain_.ingress_.push (std::span<const std::int16_t> { conversionScratch_.data(), static_cast<std::size_t> (n) });
+
+        for (int i = 0; i < n; ++i)
+            decimatorFloatScratch_[static_cast<std::size_t> (i)] =
+                static_cast<float> (conversionScratch_[static_cast<std::size_t> (i)]) * (1.0f / 32768.0f);
+
+        const int nd = decimator_.processBlock (
+            std::span<const float> { decimatorFloatScratch_.data(), static_cast<std::size_t> (n) },
+            std::span<float> { decimatorFloatOutScratch_.data(), decimatorFloatOutScratch_.size() });
+
+        if (nd > 0)
+        {
+            convertFloatToInt16Ingress (std::span<const float> { decimatorFloatOutScratch_.data(), static_cast<std::size_t> (nd) },
+                                        std::span<std::int16_t> { decimatorInt16Scratch_.data(), static_cast<std::size_t> (nd) });
+            lfChain_.ingress_.push (std::span<const std::int16_t> { decimatorInt16Scratch_.data(), static_cast<std::size_t> (nd) });
+        }
+    }
+
+    const int every = std::max (1, state_.analysisEveryNCallbacks.load (std::memory_order_relaxed));
+    lfAnalysisDecimationCounter_ = std::max (1, every * 2);
     runAnalysisChain();
     copyLatestRenderFrame (out);
 }

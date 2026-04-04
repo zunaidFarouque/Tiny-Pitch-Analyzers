@@ -390,6 +390,13 @@ MainComponent::MainComponent()
         else if (spectralBackendCombo_.getSelectedId() == 3) m = pitchlab::SpectralBackendMode::VariableQApprox_v0_1;
         else if (spectralBackendCombo_.getSelectedId() == 4) m = pitchlab::SpectralBackendMode::MultiResSTFT_v1_0;
         engine_.state().setSpectralBackendMode (m);
+        if (sampleRate_ > 0.0 && samplesPerBlockExpected_ > 0)
+        {
+            engine_.prepareToPlay (sampleRate_, samplesPerBlockExpected_);
+            const juce::ScopedLock sl (offlineMutex_);
+            const int maxBlock = juce::jmax (samplesPerBlockExpected_, engine_.state().fftSize);
+            offlineEngine_.prepareToPlay (sampleRate_, maxBlock);
+        }
         bumpInstantPreviewDebounced();
     };
 
@@ -1135,7 +1142,8 @@ void MainComponent::launchInstantWaterfallJob()
                 return;
 
             syncOfflineEngineFromLive (srFile);
-            offlineEngine_.reconfigureFftSize (fftSnap, srFile, juce::jmax (hopFile, fftSnap));
+            const int offlineNativeSamples = offlineEngine_.offlineMonoInputSampleCount();
+            offlineEngine_.reconfigureFftSize (fftSnap, srFile, juce::jmax (hopFile, juce::jmax (fftSnap, offlineNativeSamples)));
             offlineEngine_.state().audioBufferSize = hopFile;
 
             const std::int64_t len = reader->lengthInSamples;
@@ -1153,7 +1161,7 @@ void MainComponent::launchInstantWaterfallJob()
                 if (endSample <= 0 || len <= 0)
                     continue;
 
-                readMonoFloatWindow (*reader, fftSnap, endSample, win);
+                readMonoFloatWindow (*reader, offlineNativeSamples, endSample, win);
                 offlineEngine_.analyzeOfflineWindowFromMonoFloat (std::span<const float> { win.data(), win.size() }, frame);
                 std::copy (frame.chromaRow.begin(),
                            frame.chromaRow.end(),
