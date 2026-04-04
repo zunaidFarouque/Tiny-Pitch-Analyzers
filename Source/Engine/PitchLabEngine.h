@@ -4,6 +4,7 @@
 #include "CircularInt16Buffer.h"
 #include "Decimator4x.h"
 #include "EngineState.h"
+#include "PreEmphasis.h"
 #include "RenderFrameData.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -90,7 +91,8 @@ private:
     void runFftOnChain (AnalysisChain& ch,
                         juce::dsp::IIR::Filter<float>& hpFilter,
                         float& lastHpCut,
-                        double& lastHpSr) noexcept;
+                        double& lastHpSr,
+                        PreEmphasis& preEmphasis) noexcept;
 
     void runAnalysisChain() noexcept;
     void prepareToPlayImpl (double sampleRate, int maxBlockSamples);
@@ -109,6 +111,7 @@ private:
     ChromaMap chromaMap_;
 
     std::vector<float> magForFold_;
+    std::vector<float> magSmearScratch_;
     std::array<float, 384> chromaRow_ {};
     std::array<float, 384> temporalChroma_ {};
     juce::dsp::IIR::Filter<float> highPassFilter_;
@@ -119,6 +122,8 @@ private:
     double lastLfHighPassSr_ = 0.0;
     int analysisDecimationCounter_ = 0;
     int lfAnalysisDecimationCounter_ = 0;
+    PreEmphasis preEmphasisHf_;
+    PreEmphasis preEmphasisLf_;
     mutable std::mutex frameMutex_;
     RenderFrameData latestFrame_{};
     std::uint64_t frameSequence_ = 0;

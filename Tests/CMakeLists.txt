@@ -6,6 +6,7 @@ add_executable(PitchLabEngineTests
     test_chroma_map.cpp
     test_chroma_folder.cpp
     test_chroma_post.cpp
+    test_chroma_waterfall_shading.cpp
     test_copy_latest.cpp
     test_decimator.cpp
     test_multi_res_ingress.cpp
@@ -19,6 +20,7 @@ add_executable(PitchLabEngineTests
     test_offline_hop.cpp
     test_optimizations.cpp
     test_pitch_from_spectrum.cpp
+    test_pre_emphasis.cpp
     test_pitch_lab_engine.cpp
     test_render_frame_snapshot.cpp
     test_renderer_backend_policy.cpp

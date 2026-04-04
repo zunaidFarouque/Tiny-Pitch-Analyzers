@@ -1,8 +1,11 @@
 #include "ChromaPostProcess.h"
 
+#include "ChromaFolder.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace pitchlab
@@ -90,6 +93,105 @@ void applyChromaShaping384 (ChromaShapingMode mode, std::span<float> chroma384) 
         case ChromaShapingMode::PercentileGate:
             percentileGateInPlace (chroma384.subspan (0, 384));
             return;
+    }
+}
+
+namespace
+{
+[[nodiscard]] float waterfallShapingLerpT (int i,
+                                           std::span<const std::uint8_t> dominantHarmonic384,
+                                           FoldHarmonicModel harmonicModel,
+                                           double sampleRate,
+                                           float freqLogBlend) noexcept
+{
+    constexpr int kLast = 383;
+    const float tIndex = static_cast<float> (i) / static_cast<float> (kLast);
+    const float s = std::clamp (freqLogBlend, 0.0f, 1.0f);
+
+    if (dominantHarmonic384.size() < 384 || sampleRate <= 0.0)
+        return tIndex;
+
+    constexpr float kHzLo = 20.0f;
+    const float nyqHz = 0.49f * static_cast<float> (sampleRate);
+    const float kHzHi = std::min (15000.0f, nyqHz);
+    const float spanHz = kHzHi - kHzLo;
+    const float logLo = std::log10 (kHzLo);
+    const float logHi = std::log10 (kHzHi);
+    if (spanHz <= 0.0f || logHi <= logLo)
+        return tIndex;
+
+    const float f0 = chromaSliceFundamentalHz (i);
+    if (f0 <= 0.0f)
+        return tIndex;
+
+    const auto w = dominantHarmonic384[static_cast<std::size_t> (i)];
+    float hzEff = f0;
+    if (w != 255)
+    {
+        if (harmonicModel == FoldHarmonicModel::OctaveStack_Doc_v1)
+            hzEff = f0 * std::pow (2.0f, static_cast<float> (w));
+        else
+            hzEff = f0 * static_cast<float> (w + 1);
+    }
+    else
+        return tIndex;
+
+    hzEff = std::clamp (hzEff, kHzLo, kHzHi);
+    const float tLin = (hzEff - kHzLo) / spanHz;
+    const float tLog = (std::log10 (hzEff) - logLo) / (logHi - logLo);
+    return std::clamp (tLin * (1.0f - s) + tLog * s, 0.0f, 1.0f);
+}
+} // namespace
+
+void applyFreqDependentWaterfallShaping384InPlace (std::span<float> chroma384,
+                                                   WaterfallDisplayCurveMode curveMode,
+                                                   float wEnergyLow,
+                                                   float wEnergyHigh,
+                                                   float wAlphaPowLow,
+                                                   float wAlphaPowHigh,
+                                                   std::span<const std::uint8_t> dominantHarmonic384,
+                                                   FoldHarmonicModel harmonicModel,
+                                                   double sampleRate,
+                                                   float wShapingFreqLogBlend) noexcept
+{
+    if (chroma384.size() < 384)
+        return;
+
+    constexpr float kEps = 1.0e-12f;
+
+    for (int i = 0; i < 384; ++i)
+    {
+        const float t = waterfallShapingLerpT (i,
+                                                 dominantHarmonic384,
+                                                 harmonicModel,
+                                                 sampleRate,
+                                                 wShapingFreqLogBlend);
+        const float energy = wEnergyLow + t * (wEnergyHigh - wEnergyLow);
+        const float alphaPow = wAlphaPowLow + t * (wAlphaPowHigh - wAlphaPowLow);
+        const float e = std::max (0.0f, chroma384[static_cast<std::size_t> (i)]);
+        float m = 0.0f;
+
+        switch (curveMode)
+        {
+            case WaterfallDisplayCurveMode::Linear:
+            default:
+                m = std::clamp (e * energy, 0.0f, 1.0f);
+                break;
+            case WaterfallDisplayCurveMode::Sqrt:
+                m = std::clamp (std::sqrt (e) * energy, 0.0f, 1.0f);
+                break;
+            case WaterfallDisplayCurveMode::LogDb:
+            {
+                // Match VizCpuRenderer / GL: log curve ignores global energy; per-bin gain scales input amplitude.
+                const float xe = std::max (e * energy, kEps);
+                const float db = 20.0f * std::log10 (xe);
+                m = std::clamp ((db + 100.0f) / 100.0f, 0.0f, 1.0f);
+                break;
+            }
+        }
+
+        const float ap = std::max (0.0f, alphaPow);
+        chroma384[static_cast<std::size_t> (i)] = std::pow (m, ap);
     }
 }
 

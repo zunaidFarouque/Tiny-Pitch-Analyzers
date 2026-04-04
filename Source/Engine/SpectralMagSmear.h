@@ -12,6 +12,7 @@ void buildMagForFold (std::span<const float> magIn,
                       std::span<float> magOut,
                       double sampleRate,
                       int fftSize,
-                      SpectralBackendMode backend) noexcept;
+                      SpectralBackendMode backend,
+                      bool spectralSmearingEnabled = true) noexcept;
 
 } // namespace pitchlab

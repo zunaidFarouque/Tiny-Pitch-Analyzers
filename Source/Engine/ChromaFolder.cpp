@@ -98,6 +98,16 @@ namespace
 }
 } // namespace
 
+float chromaSliceFundamentalHz (int slice384) noexcept
+{
+    if (slice384 < 0 || slice384 > 383)
+        return 0.0f;
+    const int noteClass = slice384 / 32;
+    const int sub = slice384 % 32;
+    const float midi = 36.0f + static_cast<float> (noteClass) + static_cast<float> (sub) / 32.0f;
+    return 440.0f * std::pow (2.0f, (midi - 69.0f) / 12.0f);
+}
+
 void foldToChroma384 (const ChromaMap& map,
                       double sampleRate,
                       int fftSize,

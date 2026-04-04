@@ -10,6 +10,9 @@ namespace pitchlab
 
 class ChromaMap;
 
+/** Nominal fundamental Hz for chroma slice 0..383 (MIDI 36..48 micro-tuned by sub-bin). */
+[[nodiscard]] float chromaSliceFundamentalHz (int slice384) noexcept;
+
 struct FoldToChromaSettings
 {
     FoldInterpMode interpMode = FoldInterpMode::Linear2Bin;

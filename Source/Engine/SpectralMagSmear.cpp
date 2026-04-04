@@ -11,15 +11,15 @@ void buildMagForFold (std::span<const float> magIn,
                       std::span<float> magOut,
                       double sampleRate,
                       int fftSize,
-                      SpectralBackendMode backend) noexcept
+                      SpectralBackendMode backend,
+                      bool spectralSmearingEnabled) noexcept
 {
     if (magIn.empty() || magOut.size() < magIn.size() || fftSize <= 0 || sampleRate <= 0.0)
         return;
 
     const int B = static_cast<int> (magIn.size());
 
-    if (backend == SpectralBackendMode::STFT_v1_0
-        || backend == SpectralBackendMode::MultiResSTFT_v1_0)
+    if (! spectralSmearingEnabled)
     {
         std::copy (magIn.begin(), magIn.end(), magOut.begin());
         if (magOut.size() > magIn.size())

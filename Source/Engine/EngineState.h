@@ -105,6 +105,21 @@ struct EngineState
     /** Leaky-peak chroma trail: multiply prior row by this before max with new frame (0..1). */
     std::atomic<float> temporalRelease { 0.85f };
 
+    /** Waterfall chroma shading (per-bin lerp low..high across 384 bins); hosts use energy=1, alpha=1. */
+    std::atomic<float> wEnergyLow { 1.0f };
+    std::atomic<float> wEnergyHigh { 1.0f };
+    std::atomic<float> wAlphaPowLow { 2.0f };
+    std::atomic<float> wAlphaPowHigh { 2.0f };
+
+    /** Map effective Hz (20..~15k) to W-Energy/W-AlphaPow lerp: 0=linear in Hz, 1=log10(Hz) (default). */
+    std::atomic<float> wShapingFreqLogBlend { 1.0f };
+
+    /** 1st-order HPF on FFT float input: y[n]=x[n]-0.95*x[n-1]. */
+    std::atomic<bool> enablePreEmphasis { false };
+
+    /** Const-Q / Var-Q magnitude smear along FFT bins; off copies through like STFT. */
+    std::atomic<bool> spectralSmearingEnabled { true };
+
     /** Chroma fold controls. */
     std::atomic<int> foldMaxOctaves { 0 }; // <=0 means auto (to Nyquist)
     std::atomic<std::uint8_t> foldInterpModeRaw { static_cast<std::uint8_t> (FoldInterpMode::Linear2Bin) };
