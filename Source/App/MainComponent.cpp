@@ -246,7 +246,7 @@ MainComponent::MainComponent()
     waterfallAlphaPowerSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
     waterfallAlphaThresholdSlider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
 
-    waterfallEnergyScaleSlider_.setRange (0.001f, 0.2f, 0.001f);
+    waterfallEnergyScaleSlider_.setRange (0.0f, 2.0f, 0.001f);
     waterfallAlphaPowerSlider_.setRange (0.1f, 4.0f, 0.05f);
     waterfallAlphaThresholdSlider_.setRange (0.0f, 0.05f, 0.0005f);
 
