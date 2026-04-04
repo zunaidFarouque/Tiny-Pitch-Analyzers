@@ -4,6 +4,7 @@ add_executable(PitchLabEngineTests
     test_agc.cpp
     test_chord.cpp
     test_chroma_map.cpp
+    test_chroma_folder.cpp
     test_chroma_post.cpp
     test_copy_latest.cpp
     test_decimator.cpp

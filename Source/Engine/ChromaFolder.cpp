@@ -1,7 +1,5 @@
 #include "ChromaFolder.h"
 
-#include "ChromaMap.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -31,36 +29,6 @@ namespace
 
     const auto idx = static_cast<std::size_t> (std::lround (static_cast<double> (hz) * static_cast<double> (fftSize) / sampleRate));
     return std::min (idx, magBins > 0 ? magBins - 1 : 0);
-}
-
-[[nodiscard]] std::size_t fundamentalBinFromMap (const ChromaMap& map,
-                                                 int noteClass,
-                                                 float f0,
-                                                 double sampleRate,
-                                                 int fftSize,
-                                                 std::size_t magBins) noexcept
-{
-    const int maxBin = fftSize / 2;
-    const float hzLow = midiToHz (36.0f + static_cast<float> (noteClass));
-    const float hzHigh = (noteClass < 11) ? midiToHz (37.0f + static_cast<float> (noteClass))
-                                            : midiToHz (48.0f);
-
-    const float denom = hzHigh - hzLow;
-    float t = denom > 1.0e-6f ? (f0 - hzLow) / denom : 0.0f;
-    t = std::clamp (t, 0.0f, 1.0f);
-
-    int binLo = map.startBin (noteClass);
-    int binHi = (noteClass < 11) ? map.startBin (noteClass + 1)
-                                 : static_cast<int> (std::lround (static_cast<double> (midiToHz (48.0f)) * static_cast<double> (fftSize) / sampleRate));
-
-    binLo = std::clamp (binLo, 0, maxBin);
-    binHi = std::clamp (binHi, 0, maxBin);
-    if (binHi < binLo)
-        std::swap (binLo, binHi);
-
-    int fund = static_cast<int> (std::lround (static_cast<double> (binLo) + static_cast<double> (t) * static_cast<double> (binHi - binLo)));
-    fund = std::clamp (fund, 0, maxBin);
-    return std::min (static_cast<std::size_t> (fund), magBins > 0 ? magBins - 1 : 0);
 }
 
 [[nodiscard]] double hzToBinFrac (double hz, double sampleRate, int fftSize) noexcept
@@ -138,6 +106,8 @@ void foldToChroma384 (const ChromaMap& map,
                       std::span<std::uint8_t> dominantHarmonic384,
                       const FoldToChromaSettings& settings) noexcept
 {
+    (void) map;
+
     if (out384.size() < 384 || mag.empty() || fftSize <= 0)
         return;
 
@@ -152,30 +122,22 @@ void foldToChroma384 (const ChromaMap& map,
 
     for (int s = 0; s < 384; ++s)
     {
-        const int noteClass = s / 32;
-        const int sub = s % 32;
         const float f0 = sliceIndexToFundamentalHz (s);
         if (f0 <= 0.0f)
             continue;
 
-        const std::size_t fundBin = fundamentalBinFromMap (map, noteClass, f0, sampleRate, fftSize, magBins);
-        const double fundBinFrac = hzToBinFrac (static_cast<double> (f0), sampleRate, fftSize);
-        const float fundEstimate = sampleMagAtBinFrac (mag, fundBinFrac, settings.interpMode);
-        const float w0 = harmonicWeight (0, settings.harmonicWeightMode);
-
-        float sum = (settings.interpMode == FoldInterpMode::Nearest ? mag[fundBin] : fundEstimate) * w0;
-        float maxContrib = sum;
+        float sum = 0.0f;
+        float maxContrib = 0.0f;
         std::uint8_t winner = 0;
 
         if (settings.harmonicModel == FoldHarmonicModel::OctaveStack_Doc_v1)
         {
-            for (int hIdx = 1;; ++hIdx)
+            for (int hIdx = 0;; ++hIdx)
             {
                 if (settings.maxOctaves > 0 && hIdx > settings.maxOctaves)
                     break;
 
-                const double mult = std::pow (2.0, static_cast<double> (hIdx));
-                const double fh = static_cast<double> (f0) * mult;
+                const double fh = static_cast<double> (f0) * std::pow (2.0, static_cast<double> (hIdx));
                 if (fh >= nyquist)
                     break;
 
@@ -184,7 +146,7 @@ void foldToChroma384 (const ChromaMap& map,
                                              : sampleMagAtBinFrac (mag, hzToBinFrac (fh, sampleRate, fftSize), settings.interpMode);
                 const float contrib = contribRaw * harmonicWeight (hIdx, settings.harmonicWeightMode);
                 sum += contrib;
-                if (contrib > maxContrib)
+                if (hIdx == 0 || contrib > maxContrib)
                 {
                     maxContrib = contrib;
                     winner = static_cast<std::uint8_t> (std::min (hIdx, 254));
